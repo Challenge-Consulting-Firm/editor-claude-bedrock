@@ -69,16 +69,17 @@
 | 実施日 / 実施者 | 2026-07-14 / 運用者（+Claude Code） |
 | **案③ Claude Code CLI** | ✅ **OK（エンドツーエンド実測済み）** — Bearer キー + `jp.anthropic.claude-opus-4-8` でチャット応答・**ツール使用（ファイル生成エージェントタスク）**とも成功。設定手順は [setup-claude-code.md](setup-claude-code.md) |
 | Zed: チャット / エージェント | ✅ **OK（ネイティブ Bedrock プロバイダ + API キー認証、Zed 1.10.3・2026-07-14 実測）**。チャット=カスタム jp. Opus 4.8 / エージェント=組み込み Sonnet 4.6（jp. 自動付与）。**プロキシ不要だった**（当初の「Zed 直結不可」は旧情報で誤り）。制約と設定手順は [setup-zed.md](setup-zed.md) — ①settings の region が効かず既定 us-east-1（`launchctl setenv ZED_AWS_REGION` で解決）②カスタムモデルはツール一律無効 ③組み込み jp 対応表に Opus 系が漏れている（upstream 修正候補） |
-| VS Code（方式: Copilot BYOK / Continue） | ⬜ 未実施（利用者需要が出たら Continue の SigV4 直結を実測） |
+| VS Code（Claude Code 拡張） | ✅ **OK（2026-07-14 実測）**。チャット + エージェントタスク（hello.py 生成・実行確認）完走。CloudTrail 裏取り済み: 認証主体=editor-claude-poc（Bearer キー）/ **modelId=アプリケーション推論プロファイル ARN（= タグ配賦が効く）** / inferenceRegion=ap-northeast-1。⚠️ 罠: この環境の `code` CLI は Cursor へのリンクだった（[setup-vscode.md](setup-vscode.md)）。Copilot BYOK は Bedrock 非対応で不可、Continue は未実測（需要が出たら） |
 | 必要だった設定上の工夫（互換性の罠） | Claude Code は **InvokeModelWithResponseStream** を使う。「model is not available」表示の実体は ①**Anthropic use case フォーム未提出**（404）②Opus 系のみ追加で **Marketplace 契約未完了**（403）だった。**Converse は use case 未提出でも通る**（Haiku/Sonnet で実証）が InvokeModel 系は拒否する — AWS 側の執行不整合のため、**疎通確認を Converse でやると誤判定する**。契約作成後は約 2 分の伝播待ちが必要。診断は `ANTHROPIC_LOG=debug` |
 | 判定 | ✅ **OK（Claude Code 経路）** — Zed/VS Code はプロキシ検証（別途）に切出し |
 
 **解除済みの管理者作業（2026-07-14 実施・アカウント初回のみ）**:
 1. Anthropic use case フォームを CLI で提出（`aws bedrock put-use-case-for-model-access`。
    `intendedUsers` は数値コード文字列 — `"0"`=Internal。誤ると "Invalid form data"）
-2. Opus 4.8 の契約作成: `list-foundation-model-agreement-offers` で offerToken 取得 →
-   `create-foundation-model-agreement` → agreement が PENDING→AVAILABLE（約 70 秒）→ さらに約 2 分で invoke 可能に。
-   **Haiku/Sonnet は契約不要**（use case フォームのみで開通）
+2. モデル契約の作成（**全 Claude モデルで必要** — 当初「Haiku/Sonnet 不要」と誤認したが、執行が非同期なだけだった。
+   Haiku は契約なしで半日通った後に AccessDenied に変わった）: `list-foundation-model-agreement-offers` で
+   offerToken 取得 → `create-foundation-model-agreement` → PENDING→AVAILABLE（約 60-70 秒）→ 伝播約 2 分で invoke 可能。
+   Opus 4.8 / Haiku 4.5 / Sonnet 4.6 とも契約済み（2026-07-14）
 
 ## コスト可視化（2026-07-14 追加実装）
 

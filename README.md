@@ -56,8 +56,10 @@
 9. **Anthropic の use case フォーム提出（Model access の初回手続き）は必須**だが、執行が API で不整合:
    **Converse は未提出でも通る / InvokeModel は 404 で拒否**。`get-foundation-model-availability` が
    AUTHORIZED を返しても手続き完了を意味しない。Claude Code は InvokeModel を使うためここで止まる
-10. **Opus 系のみ Marketplace 契約が追加で必要**（403: `aws-marketplace:Subscribe` 系）。Haiku/Sonnet は不要。
-    コンソールの Model access フローで管理者が一度完了させれば、利用者側の IAM に Marketplace 権限は不要
+10. **Marketplace 契約は全 Claude モデルで必要**（403: `aws-marketplace:Subscribe` 系）。管理者が一度
+    契約を作れば利用者側の IAM に Marketplace 権限は不要。⚠️ **執行は非同期に後から効く**: 契約なしでも
+    最初の数十分は通ってしまい、後から AccessDenied に変わる（Opus で 40 分、Haiku で半日ズレを実測。
+    「今動いた」は契約済みの証明にならない — 使うモデルは最初に全部契約しておくこと）
 11. Claude Code CLI の「model is not available on your bedrock deployment」表示は誤解を招く
     — 実体は上記 9/10 の 404/403（`ANTHROPIC_LOG=debug` で実エラーを確認できる）
 
