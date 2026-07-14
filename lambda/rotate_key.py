@@ -30,15 +30,52 @@ USER_NAME = os.environ["POC_USER_NAME"]
 KEY_AGE_DAYS = int(os.environ.get("KEY_AGE_DAYS", "15"))
 API_KEY_PARAM = os.environ["API_KEY_PARAM"]
 WEBHOOK_PARAM = os.environ["WEBHOOK_PARAM"]
+# 利用者向け設定値（キーと違って不変なので毎回の投稿に同梱する）
+OPUS_PROFILE_ARN = os.environ.get("OPUS_PROFILE_ARN", "")
+SONNET_PROFILE_ARN = os.environ.get("SONNET_PROFILE_ARN", "")
+HAIKU_MODEL_ID = os.environ.get("HAIKU_MODEL_ID", "jp.anthropic.claude-haiku-4-5-20251001-v1:0")
+AWS_REGION_FOR_USERS = os.environ.get("AWS_REGION_FOR_USERS", "ap-northeast-1")
+DOCS_URL = os.environ.get("DOCS_URL", "https://github.com/Challenge-Consulting-Firm/editor-claude-bedrock/tree/main/docs")
 SERVICE = "bedrock.amazonaws.com"
 
 ROTATION_MESSAGE_TEMPLATE = (
-    "エディタ用 Claude (Bedrock) API キーをローテーションしました。\n"
-    "新しいキー:\n{key}\n"
-    "Claude Code の AWS_BEARER_TOKEN_BEDROCK をこの値に貼り替えてください"
-    "（手順: リポジトリ editor-claude-bedrock の docs/setup-claude-code.md）。\n"
-    "旧キーは次回ローテーション（1週間後）で削除されます。"
+    "【エディタ用 Claude (Bedrock)】{heading}\n"
+    "\n"
+    "■ APIキー（VS Code/Claude Code は AWS_BEARER_TOKEN_BEDROCK、Zed は Bedrock API Key 欄）\n"
+    "{key}\n"
+    "\n"
+    "■ そのほかの設定値（コピペ用・変更なし）\n"
+    "・リージョン（AWS_REGION / ZED_AWS_REGION）: {region}\n"
+    "・主力モデル Opus 4.8（ANTHROPIC_MODEL / Zed モデル name）:\n"
+    "  {opus_arn}\n"
+    "・節約モデル Sonnet 4.6:\n"
+    "  {sonnet_arn}\n"
+    "・軽量モデル（ANTHROPIC_SMALL_FAST_MODEL / ANTHROPIC_DEFAULT_HAIKU_MODEL）:\n"
+    "  {haiku_id}\n"
+    "\n"
+    "■ 手順書（初回セットアップはこちら）\n"
+    "{docs_url}\n"
+    "・Claude Code CLI: setup-claude-code.md / VS Code: setup-vscode.md / Zed: setup-zed.md\n"
+    "\n"
+    "{footer}"
 )
+
+
+def build_message(key: str, *, rotated: bool) -> str:
+    return ROTATION_MESSAGE_TEMPLATE.format(
+        heading="APIキーをローテーションしました" if rotated else "現在の接続設定のご案内（キーの変更はありません）",
+        key=key,
+        region=AWS_REGION_FOR_USERS,
+        opus_arn=OPUS_PROFILE_ARN or "(運用者に確認)",
+        sonnet_arn=SONNET_PROFILE_ARN or "(運用者に確認)",
+        haiku_id=HAIKU_MODEL_ID,
+        docs_url=DOCS_URL,
+        footer=(
+            "旧キーは次回ローテーション（1週間後）で削除されます。1週間以内に貼り替えてください。"
+            if rotated
+            else "お手元のキーが無効な場合は運用者へ連絡してください。"
+        ),
+    )
 
 iam = boto3.client("iam")
 ssm = boto3.client("ssm")
@@ -69,6 +106,14 @@ def post_teams(webhook_url: str, message: str, *, max_attempts: int = 3, backoff
 
 
 def handler(event, context):  # noqa: ARG001
+    # notify_only: キーは回さず、SSM の現行キー + 設定値一式を Teams へ再投稿するだけ
+    # （新メンバー向けの随時案内・投稿フォーマット確認用。手動 invoke で使う）
+    if isinstance(event, dict) and event.get("notify_only"):
+        current_key = ssm.get_parameter(Name=API_KEY_PARAM, WithDecryption=True)["Parameter"]["Value"]
+        webhook_url = ssm.get_parameter(Name=WEBHOOK_PARAM, WithDecryption=True)["Parameter"]["Value"]
+        post_teams(webhook_url, build_message(current_key, rotated=False))
+        return {"rotated": False, "notified": True}
+
     # 1-2. 既存キーを列挙し、上限（2 本）に達していれば最古を削除
     creds = iam.list_service_specific_credentials(UserName=USER_NAME, ServiceName=SERVICE).get(
         "ServiceSpecificCredentials", []
@@ -95,7 +140,7 @@ def handler(event, context):  # noqa: ARG001
 
     # 5. Teams へ投稿（失敗したら関数ごと失敗させる）
     webhook_url = ssm.get_parameter(Name=WEBHOOK_PARAM, WithDecryption=True)["Parameter"]["Value"]
-    post_teams(webhook_url, ROTATION_MESSAGE_TEMPLATE.format(key=new_key))
+    post_teams(webhook_url, build_message(new_key, rotated=True))
 
     return {
         "rotated": True,

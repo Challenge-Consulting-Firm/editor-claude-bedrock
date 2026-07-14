@@ -42,8 +42,9 @@ data "aws_iam_policy_document" "rotate_key" {
     resources = [aws_iam_user.poc.arn]
   }
   statement {
-    sid       = "StoreApiKey"
-    actions   = ["ssm:PutParameter"]
+    sid = "StoreApiKey"
+    # GetParameter は notify_only モード（現行キーの再案内投稿）が使う
+    actions   = ["ssm:PutParameter", "ssm:GetParameter"]
     resources = ["arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.api_key_param_name}"]
   }
   statement {
@@ -79,6 +80,11 @@ resource "aws_lambda_function" "rotate_key" {
       KEY_AGE_DAYS  = tostring(var.rotation_key_age_days)
       API_KEY_PARAM = local.api_key_param_name
       WEBHOOK_PARAM = local.webhook_param_name
+      # Teams 投稿に同梱する利用者向け設定値（キーと違い不変。コピペで設定完了できるように）
+      OPUS_PROFILE_ARN     = aws_bedrock_inference_profile.editor["opus-4-8"].arn
+      SONNET_PROFILE_ARN   = aws_bedrock_inference_profile.editor["sonnet-4-6"].arn
+      HAIKU_MODEL_ID       = local.app_profile_models["haiku-4-5"]
+      AWS_REGION_FOR_USERS = var.aws_region
     }
   }
 }
