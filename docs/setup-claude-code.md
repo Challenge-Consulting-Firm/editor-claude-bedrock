@@ -1,0 +1,78 @@
+# Claude Code セットアップ（検証 3 実測済み・2026-07-14）
+
+Claude Code CLI から Bedrock の **jp. プロファイル（国内完結）× Claude Opus 4.8** を Bearer API キーで使う手順。
+**エンドツーエンド実測済み**（チャット応答・ツール使用によるファイル生成の両方を確認）。
+
+## 0. 前提（運用者側で完了済みであること）
+
+- アカウントの **Anthropic use case フォーム提出**と **Opus 4.8 の契約作成**（初回のみ。[poc-checklist.md](poc-checklist.md) 参照）
+- 利用者用 IAM ユーザー + jp. 限定ポリシー（[infra/main.tf](../infra/main.tf)）
+- Bedrock API キーの発行（`scripts/10-issue-api-key.sh`。有効期限つき）
+
+## 1. 利用者の設定
+
+**キーは Teams のローテ通知に記載された「新しいキー」をコピーする**（毎週月曜 09:00 JST に自動投稿。
+Azure 版と同じチャネル）。旧キーは次回ローテで削除されるため、通知が来たら 1 週間以内に貼り替えること。
+運用者は SSM からも取得できる:
+`aws ssm get-parameter --name /editor-claude-bedrock/api-key --with-decryption --query Parameter.Value --output text`
+
+受け取ったキーをシェルまたは `~/.claude/settings.json` に設定する。
+
+**環境変数の場合**（`~/.zshrc` 等）:
+
+```bash
+export CLAUDE_CODE_USE_BEDROCK=1
+export AWS_REGION=ap-northeast-1
+export AWS_BEARER_TOKEN_BEDROCK='<配布されたキー>'
+# 主力: Opus 4.8（国内完結・コスト配賦タグつき）— アプリケーション推論プロファイル ARN を推奨
+# （ARN は `terraform output application_inference_profile_arns` で確認。実測済み 2026-07-14）
+export ANTHROPIC_MODEL='arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<PROFILE_ID>'
+# タグ配賦が不要なら jp. システムプロファイル直指定でも可:
+# export ANTHROPIC_MODEL='jp.anthropic.claude-opus-4-8'
+# 補助タスク用の軽量モデル（どちらの変数名も設定しておく）
+export ANTHROPIC_SMALL_FAST_MODEL='jp.anthropic.claude-haiku-4-5-20251001-v1:0'
+export ANTHROPIC_DEFAULT_HAIKU_MODEL='jp.anthropic.claude-haiku-4-5-20251001-v1:0'
+```
+
+**settings.json の場合**（`~/.claude/settings.json` — プロジェクト側 `.claude/settings.json` でも可）:
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_USE_BEDROCK": "1",
+    "AWS_REGION": "ap-northeast-1",
+    "ANTHROPIC_MODEL": "jp.anthropic.claude-opus-4-8",
+    "ANTHROPIC_SMALL_FAST_MODEL": "jp.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "jp.anthropic.claude-haiku-4-5-20251001-v1:0"
+  }
+}
+```
+
+> キー（`AWS_BEARER_TOKEN_BEDROCK`）は settings.json に書かずシェル環境変数で渡すこと
+> （設定ファイルの共有・コミット事故を防ぐ）。
+
+節約したい日常タスクは `--model jp.anthropic.claude-sonnet-4-6` への切替も可
+（jp. 対応モデルは全て IAM 許可済み。単価は Opus $5.5/$27.5、Sonnet 約 $3.3/$16.5、Haiku 約 $1.1/$5.5 per 1M・jp +10% 込み目安）。
+
+## 2. 動作確認
+
+```bash
+claude -p "「国内完結OK」とだけ返答してください"
+```
+
+## 3. トラブルシューティング（実測で踏んだ罠）
+
+| 症状 | 実体 | 対処 |
+|---|---|---|
+| `The model ... is not available on your bedrock deployment` | **表示が誤解を招く**。実体は下 2 行のどちらかが大半 | `ANTHROPIC_LOG=debug claude -p "ping"` で実際の HTTP エラーを確認 |
+| （debug で）404 `Model use case details have not been submitted` | アカウントの Anthropic use case フォーム未提出 | 運用者に連絡（管理者作業） |
+| （debug で）403 `aws-marketplace:ViewSubscriptions...` | Opus 系の契約未作成 or 作成直後の伝播待ち | 運用者に連絡。作成済みなら **2 分待って再実行** |
+| 401 / `access_denied` | キー失効（有効期限切れ）or jp. 以外のモデルを指定 | 新キーを受領 / `jp.` プレフィックスのモデルに戻す |
+| `Converse` の疎通確認は通るのに Claude Code が動かない | Claude Code は **InvokeModelWithResponseStream** を使う。**Converse は use case フォーム未提出でも通ってしまう**（AWS の執行不整合）ため疎通確認としては不十分 | 動作確認は本ページ §2 の `claude -p` で行う |
+
+## 4. 運用メモ
+
+- 監査: 利用は CloudTrail に `InvokeModelWithResponseStream`（modelId=jp.…）として記録され、
+  成功呼び出しには `inferenceRegion`（ap-northeast-1/3）が付く。`scripts/04-check-cloudtrail.sh` で確認
+- 迂回防止: `jp.` 以外のモデル指定は IAM で拒否される（エラーになるのが正常）
+- Claude 5 系（fable-5 / sonnet-5）は jp. 未対応のため設定不可。対応され次第 `ANTHROPIC_MODEL` を差し替え
