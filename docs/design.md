@@ -59,7 +59,7 @@ Azure 版との対応:
 
 - モデル: **Claude Opus 4.8**（Bedrock 提供開始 2026-05-28、東京リージョン提供・`jp.` プロファイル対応の報告あり）
 - プロファイル ID は**実測（`scripts/01`）で確定**。`.env` の `JP_PROFILE_ID` が全スクリプト・エディタ設定の単一の参照点
-- 単価: $5 / $25（per 1M、入力/出力）+ `jp.` プレミアム 10% → **実効 $5.5 / $27.5**。
+- 単価: $6 / $30（per 1M、入力/出力・AWS 料金表 2026-07 実測）+ `jp.` プレミアム 10% → **実効 $6.6 / $33.0**。（当初 $5/$25 は誤りだった）
   Prompt Caching（読み取り 0.1 倍）併用でエージェント用途の実効コストを下げる
 - Bedrock は既定で入力プロンプトをモデル学習に使用しない（Anthropic にもログを共有しない）
 
@@ -111,6 +111,11 @@ Bedrock では IAM で**技術的に強制**する（[infra/main.tf](../infra/ma
   - 初回のみ: 課金データにタグが現れた後（利用開始から最大 24h）、コスト配分タグを有効化する:
     `aws ce update-cost-allocation-tags-status --cost-allocation-tags-status TagKey=Project,Status=Active TagKey=Phase,Status=Active`
   - Azure 版 KQL 相当の「ユーザー別集計」は本番化で Model invocation logging（CloudWatch Logs/S3）を追加して実装
+- **週次利用状況レポート（実装）**: EventBridge Scheduler（月曜 09:30 JST）→ Lambda → Teams。
+  CloudWatch Metrics（`AWS/Bedrock`）でモデル別トークン消費量＋概算費用、Cost Explorer でタグ配賦の実コスト
+  （週次 + 月次累計・月次予算対比）を集計して投稿（[infra/usage_report.tf](../infra/usage_report.tf) /
+  [lambda/report_usage.py](../lambda/report_usage.py)）。トークン系は全呼出（Zed 組み込みモデル含む）を捕捉するが、
+  実コストはタグ配賦分のみ（Zed 組み込みモデルは抜ける = 既知の差）。⚠️ 実コスト取得にはコスト配分タグの有効化が前提
 
 ## 7. 本番化 TODO（PoC 通過後）
 

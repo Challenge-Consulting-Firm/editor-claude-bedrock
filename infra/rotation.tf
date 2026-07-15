@@ -13,10 +13,10 @@ resource "aws_ssm_parameter" "teams_webhook" {
   value = var.teams_webhook_url
 }
 
-data "archive_file" "rotate_key" {
+data "archive_file" "lambda_zip" {
   type        = "zip"
-  source_file = "${path.module}/../lambda/rotate_key.py"
-  output_path = "${path.module}/rotate_key.zip"
+  source_dir  = "${path.module}/../lambda"
+  output_path = "${path.module}/lambda.zip"
 }
 
 resource "aws_iam_role" "rotate_key" {
@@ -70,8 +70,8 @@ resource "aws_lambda_function" "rotate_key" {
   role             = aws_iam_role.rotate_key.arn
   runtime          = "python3.12"
   handler          = "rotate_key.handler"
-  filename         = data.archive_file.rotate_key.output_path
-  source_code_hash = data.archive_file.rotate_key.output_base64sha256
+  filename         = data.archive_file.lambda_zip.output_path
+  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
   timeout          = 60
 
   environment {
