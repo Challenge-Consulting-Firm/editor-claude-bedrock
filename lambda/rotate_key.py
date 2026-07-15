@@ -15,13 +15,11 @@
   - 新キー本文を Teams に含める（週次ローテ前提で秘匿性は低いと判断。チャネルは利用者限定が前提）
 """
 
-import json
 import logging
 import os
-import time
-import urllib.request
 
 import boto3
+from teams import post_teams
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -105,30 +103,6 @@ def build_message(key: str, *, rotated: bool) -> str:
 
 iam = boto3.client("iam")
 ssm = boto3.client("ssm")
-
-
-class TeamsNotificationError(Exception):
-    """リトライしても Teams への投稿に失敗した。"""
-
-
-def post_teams(webhook_url: str, message: str, *, max_attempts: int = 3, backoff_seconds: float = 5.0) -> None:
-    payload = json.dumps({"text": message}).encode("utf-8")
-    last_error = None
-    for attempt in range(1, max_attempts + 1):
-        try:
-            req = urllib.request.Request(
-                webhook_url, data=payload, headers={"Content-Type": "application/json"}, method="POST"
-            )
-            with urllib.request.urlopen(req, timeout=15) as res:
-                if res.status >= 300:
-                    raise RuntimeError(f"HTTP {res.status}")
-            return
-        except Exception as exc:  # noqa: BLE001 - リトライ対象を広く取る
-            last_error = exc
-            logger.warning("Teams 投稿失敗 (%s/%s): %s", attempt, max_attempts, exc)
-            if attempt < max_attempts:
-                time.sleep(backoff_seconds * attempt)
-    raise TeamsNotificationError(f"Teams への通知に {max_attempts} 回失敗しました") from last_error
 
 
 def handler(event, context):  # noqa: ARG001

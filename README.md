@@ -107,10 +107,14 @@ cp .env.sample .env        # .env は .gitignore 済み。値を実値に置き�
 
 ## コストの目安
 
-- Opus 4.8: **$5 入力 / $25 出力**（per 1M トークン）。`jp.` プロファイルは **+10%** → 実効 **$5.5 / $27.5**
+- Opus 4.8: **$6 入力 / $30 出力**（per 1M トークン・AWS 料金表 2026-07 実測）。`jp.` プロファイルは **+10%** → 実効 **$6.6 / $33.0**
 - Prompt Caching（読み取り 0.1 倍）は Bedrock でも同単価で有効。エージェント用途では実効コストを大きく下げる
 - PoC 中の暴走防止として Budget（既定 $200/月、50/75/90% でメール通知）を Terraform で配備。
   **ハードストップ（Azure 版の disableLocalAuth 相当）は本番化スコープ**（[docs/design.md](docs/design.md) §7）
+- **週次レポート**: 毎週月曜 09:30 JST に Teams へトークン消費量（モデル別）+ 概算費用 + 実コスト（タグ配賦）を投稿
+  （[infra/usage_report.tf](infra/usage_report.tf) / [lambda/report_usage.py](lambda/report_usage.py)）。
+  実コスト集計には事前にコスト配分タグ（`Project` / `Phase`）の有効化が必要
+  （`aws ce update-cost-allocation-tags-status ...`。詳細は [docs/design.md](docs/design.md) §6）
 
 ## ドキュメント
 

@@ -52,7 +52,7 @@ export ANTHROPIC_DEFAULT_HAIKU_MODEL='jp.anthropic.claude-haiku-4-5-20251001-v1:
 > （設定ファイルの共有・コミット事故を防ぐ）。
 
 節約したい日常タスクは `--model jp.anthropic.claude-sonnet-4-6` への切替も可
-（jp. 対応モデルは全て IAM 許可済み。単価は Opus $5.5/$27.5、Sonnet 約 $3.3/$16.5、Haiku 約 $1.1/$5.5 per 1M・jp +10% 込み目安）。
+（jp. 対応モデルは全て IAM 許可済み。単価は Opus $6.6/$33.0（AWS 料金表 2026-07 実測）、Sonnet/Haiku は料金表に公開行がなく未確定 per 1M・jp +10% 込み）。
 
 ## 2. 動作確認
 
