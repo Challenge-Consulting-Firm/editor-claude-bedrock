@@ -13,12 +13,46 @@ CloudTrail で国内ルーティングを確認）。
 |---|---|---|
 | チャット × Opus 4.8 × 国内完結 | カスタム「社内: Claude Opus 4.8 (国内完結)」 | ✅ 実測 OK |
 | エージェント（ツール込み）× 国内完結 | **組み込みの「Claude Sonnet 4.6」**（jp. 自動付与） | ✅ 実測 OK |
-| エージェント × Opus 4.8 | — | ❌ 不可（下記の 2 制約の合わせ技） |
+| エージェント × Opus 4.8 | — | ❌ 不可（**Zed 固有の制約**。下記参照） |
 
-Opus 4.8 エージェントが不可な理由（Zed 側の制約 2 つ）:
-1. カスタムモデル（`available_models`）は Zed がツール使用を一律無効にする（「Tools Unsupported」表示）
-2. 組み込みモデルの jp 対応表に Opus 系が入っていない（EU・豪州にはあるのに。`crates/bedrock/src/models.rs` の
-   jp match arm は Sonnet 4.6/4.5・Haiku 4.5・Nova 2 Lite のみ）→ upstream 修正候補
+> **⚠️ 誤読注意**: 「エージェント × Opus 4.8 不可」は **Zed の AI パネル（ネイティブプロバイダ）固有**の話で、
+> **Bedrock 自体の制限ではない**。Opus 4.8 × 国内完結 × ツールは Bedrock 上で成立する —
+> Claude Code CLI / VS Code 拡張 / ネイティブ Converse API 経由なら**三方とも満たせる**
+> （[docs/setup-claude-code.md](setup-claude-code.md) は `jp.anthropic.claude-opus-4-8` で
+> エージェントタスク完走を PoC 検証 3 で実測済み）。
+
+### 経路別マトリクス（Opus 4.8 × 国内完結 × ツール）
+
+| 経路 | 国内完結 | ツール | 備考 |
+|---|---|---|---|
+| Claude Code CLI（`ANTHROPIC_MODEL=jp.anthropic.claude-opus-4-8`） | ✅ | ✅ | InvokeModelWithResponseStream 使用 |
+| VS Code Claude Code 拡張（同上 / アプリケーション推論プロファイル ARN） | ✅ | ✅ | PoC 検証 3 で CloudTrail 裏取り済み |
+| ネイティブ Converse API（直接呼び出し） | ✅ | ✅ | CloudTrail で `inferenceRegion=ap-northeast-1` 確認済み |
+| **Zed: カスタムモデル**（`available_models` に Opus 4.8 ARN） | ✅ | ❌ | `supports_tool_use()` が false 固定 |
+| **Zed: 組み込み Opus**（`allow_global=true`） | ❌ | ✅ | `global.` にルーティングされ国内完結が崩れる |
+| **Zed: 組み込み Opus**（`allow_global=false`） | △ | ✅ | 素の `anthropic.claude-opus-4-8` になり PoC の jp.限定 IAM が拒否 |
+
+### Zed で「Opus 4.8 × 国内完結 × ツール」が揃わない理由（Zed 側の制約）
+
+以下はいずれも **Bedrock 側ではなく Zed（upstream 修正候補）** の制約。Zed のソースコード
+（[`crates/bedrock/src/models.rs`](https://github.com/zed-industries/zed/blob/main/crates/bedrock/src/models.rs)、
+GitHub main ブランチ・2026-07 取得）で裏付け:
+
+1. **カスタムモデルはツールが一律無効** — `ConverseModel::supports_tool_use()` で `Custom { .. }` が
+   true を返す分岐に含まれず `_ => false` に落ちる（「Tools Unsupported」表示の正体）。
+   → `available_models` に Opus 4.8 ARN を登録しても、名前に関わらずツールは効かない。
+2. **組み込みモデルの jp 対応表に Opus 系が漏れている** — `cross_region_inference_id()` の `"jp"` arm は
+   `ClaudeSonnet4_6 | ClaudeSonnet4_5 | ClaudeHaiku4_5 | Nova2Lite` の4機種のみ。
+   Opus 系（4.8/4.7/4.6/4.5/4.1）は jp arm にない（EU・豪州 arm にはある）。
+3. **`allow_global` の分岐** — 同関数で `allow_global=true` かつ `supports_global` なモデル
+   （Opus 4.8 含む）の場合、日本リージョンでも `region_group` が `"global"` に切り替わり
+   `global.anthropic.claude-opus-4-8` にルーティングされる。これなら組み込みなのでツールは効くが、
+   **`global.` は推論を日本国外に逃がすため国内完結要件と両立しない**。
+   逆に `allow_global=false` だと jp arm に入らない Opus は `_ => model_id`（素の ID）に落ち、
+   PoC の jp.限定 IAM ポリシー（[infra/main.tf](../infra/main.tf)）に拒否される。
+
+> ※ mantle エンドポイント（`MantleModel`）の `Custom` には `supports_tools: bool` フィールドがあり設定可能だが、
+> 本 PoC は国内完結統制の観点から mantle を IAM で拒否済み（[infra/main.tf](../infra/main.tf)）。この抜け道は使えない。
 
 → 使い分け: **エージェント作業は Claude Code CLI（Opus 4.8）**、**Zed 内では Sonnet 4.6 エージェント +
 Opus 4.8 チャット**。

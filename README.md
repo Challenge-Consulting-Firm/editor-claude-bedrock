@@ -13,7 +13,7 @@
 |---|---|---|---|
 | 1 | **`jp.` プロファイルに Opus 4.8 が実在するか** | `scripts/01-list-jp-profiles.sh`（`list-inference-profiles` 実測） | ✅ **OK** — `jp.anthropic.claude-opus-4-8`（東京+大阪） |
 | 2 | **OpenAI 互換エンドポイントから `jp.` プロファイルを指定して国内完結推論が成立するか** | `scripts/03-invoke-openai-compat.sh` + `scripts/04-check-cloudtrail.sh` | ⚠️ **(a)直結 NG / (b)迂回防止 OK / (c)国内完結 OK** — ネイティブ Converse では完全成立。OpenAI 互換×Claude が AWS 側に存在しない（下記「実測で分かった制約」） |
-| 3 | **エディタ/CLI から Bedrock API キーで実際に動くか** | [docs/setup-claude-code.md](docs/setup-claude-code.md) / [docs/setup-zed.md](docs/setup-zed.md) | ✅ **Claude Code CLI で OK**（チャット+エージェント、`inferenceRegion=ap-northeast-1` 確認済み）。✅ **Zed もネイティブ Bedrock プロバイダで直結 OK**（チャット=Opus 4.8 / エージェント=Sonnet 4.6。プロキシ不要）。VS Code は需要が出たら Continue で実測（[poc-checklist.md](docs/poc-checklist.md)） |
+| 3 | **エディタ/CLI から Bedrock API キーで実際に動くか** | [docs/setup-claude-code.md](docs/setup-claude-code.md) / [docs/setup-zed.md](docs/setup-zed.md) | ✅ **Claude Code CLI で OK**（チャット+エージェント、`inferenceRegion=ap-northeast-1` 確認済み）。✅ **Zed もネイティブ Bedrock プロバイダで直結 OK**（チャット=Opus 4.8 / エージェント=Sonnet 4.6。プロキシ不要）。⚠️ Zed の AI パネルでは「Opus 4.8 × 国内完結 × ツール」が揃わない（Zed 固有の制約・ソースコード裏付け）。VS Code は需要が出たら Continue で実測（[poc-checklist.md](docs/poc-checklist.md)） |
 
 補助検証: `scripts/02-invoke-converse.sh`（ネイティブ Converse での疎通 = 問題の切り分け用）、
 `scripts/03` の**ネガティブテスト**（`jp.` 以外のプロファイルが IAM で拒否されること = 迂回防止の実証）。
