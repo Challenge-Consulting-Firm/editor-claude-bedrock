@@ -120,4 +120,4 @@ cp .env.sample .env        # .env は .gitignore 済み。値を実値に置き�
 
 - [docs/design.md](docs/design.md) — PoC アーキテクチャ・IAM 統制設計・キー運用・本番化 TODO
 - [docs/poc-checklist.md](docs/poc-checklist.md) — 検証手順・判定基準・**実測記録（正）**
-- [docs/setup-claude-code.md](docs/setup-claude-code.md) / [docs/setup-zed.md](docs/setup-zed.md) / [docs/setup-vscode.md](docs/setup-vscode.md) — エディタ/CLI 設定手順
+- [docs/setup-claude-code.md](docs/setup-claude-code.md) / [docs/setup-zed.md](docs/setup-zed.md) / [docs/setup-vscode.md](docs/setup-vscode.md) — エディタ/CLI 設定手順（各ページ末尾に Windows 差分あり・未実測）

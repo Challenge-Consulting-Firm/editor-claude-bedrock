@@ -151,3 +151,14 @@ Settings → AI → LLM Providers → **Amazon Bedrock** → Bedrock API Key 欄
   `inferenceRegion` が ap-northeast-1/3 であることを確認できる）
 - コスト配賦: カスタムモデル（上記 ARN 指定）の利用は `Project` タグで Cost Explorer 集計可能。
   **組み込み Sonnet 4.6（エージェント用）はシステムプロファイル直のためタグ配賦されない**（design.md §6）。
+
+## 5. Windows での差分（未実測）
+
+設定内容・制約は macOS と同一。OS 依存の差分だけ:
+
+- **設定ファイル**: `~/.config/zed/settings.json` → `%APPDATA%\Zed\settings.json`（中身の
+  `language_models.bedrock` は §2 と同一）
+- **リージョン固定**: `setx ZED_AWS_REGION ap-northeast-1`（§2 に記載。ユーザー環境変数に入り GUI 起動の
+  Zed にも常に効く。設定後は Zed を完全終了 = ウィンドウ全閉じ + タスクトレイからも終了 → 再起動）
+- **API キー**: Settings → AI → LLM Providers → Amazon Bedrock の欄に貼る（Windows Credential Manager に保管）
+- 「Opus 4.8 × 国内完結 × ツールが揃わない」Zed 固有の制約（§1）は OS 共通

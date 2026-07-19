@@ -76,3 +76,24 @@ claude -p "「国内完結OK」とだけ返答してください"
   成功呼び出しには `inferenceRegion`（ap-northeast-1/3）が付く。`scripts/04-check-cloudtrail.sh` で確認
 - 迂回防止: `jp.` 以外のモデル指定は IAM で拒否される（エラーになるのが正常）
 - Claude 5 系（fable-5 / sonnet-5）は jp. 未対応のため設定不可。対応され次第 `ANTHROPIC_MODEL` を差し替え
+
+## 5. Windows での差分（未実測）
+
+接続情報・IAM 統制・監査は macOS と同一。OS 依存の差分は環境変数の入れ方と設定ファイルの場所だけ。
+（PoC 検証 3 の実測は macOS のみ。Windows で完走できたら [poc-checklist.md](poc-checklist.md) に追記すること）
+
+- **設定ファイル**: `~/.claude/settings.json` → `%USERPROFILE%\.claude\settings.json`（中身の `env` ブロックは §1 と同一）
+- **環境変数（PowerShell・現在のセッションのみ）**:
+
+  ```powershell
+  $env:CLAUDE_CODE_USE_BEDROCK = "1"
+  $env:AWS_REGION = "ap-northeast-1"
+  $env:AWS_BEARER_TOKEN_BEDROCK = "<配布されたキー>"
+  $env:ANTHROPIC_MODEL = "jp.anthropic.claude-opus-4-8"   # または application-inference-profile ARN
+  ```
+
+- **恒久化**: `setx CLAUDE_CODE_USE_BEDROCK 1`（新しいプロセスから有効。既存ターミナルは再起動が必要）。
+  ただし **キー（`AWS_BEARER_TOKEN_BEDROCK`）は `setx` で恒久化しない** — 週次ローテの秘密が全プロセスから
+  読めてしまうため、セッション変数（`$env:`）で都度渡す。削除は
+  `[Environment]::SetEnvironmentVariable("ANTHROPIC_MODEL", $null, "User")`
+- **debug ログ**: `$env:ANTHROPIC_LOG = "debug"; claude -p "ping"`
