@@ -45,3 +45,21 @@ AWS_BEARER_TOKEN_BEDROCK='<キー>' code -n <ワークスペース>
   その場合は VS Code 同梱 CLI をフルパスで:
   `"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"`
 - Cursor でも同拡張は動く見込み（VS Code フォークのため）。組織で Cursor 利用者がいる場合は同手順を流用可
+
+## Windows での差分（未実測）
+
+考え方は同じ。OS 依存の差分だけ:
+
+- **設定ファイル**: ワークスペース側 `.claude\settings.json`（中身は上記 JSON と同一）
+- **キーの渡し方**: VS Code は GUI 起動でもユーザー環境変数を継ぐため、macOS のような
+  「完全終了 → ターミナルから起動」の縛りはない。恒久化するなら PowerShell で
+  `setx ANTHROPIC_MODEL "jp.anthropic.claude-opus-4-8"` 等。**ただしキー
+  （`AWS_BEARER_TOKEN_BEDROCK`）は `setx` で OS に恒久化しない**（週次ローテの秘密が全プロセスから
+  読める）。セッション限定で渡すなら PowerShell から:
+
+  ```powershell
+  $env:AWS_BEARER_TOKEN_BEDROCK = "<キー>"; code -n <ワークスペース>
+  ```
+
+- **`code` が PATH にない**場合: コマンドパレット →「Shell Command: Install 'code' command in PATH」、
+  または `"%LOCALAPPDATA%\Programs\Microsoft VS Code\bin\code.cmd"` をフルパス指定
