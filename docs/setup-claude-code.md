@@ -8,6 +8,54 @@ Claude Code CLI から Bedrock の **jp. プロファイル（国内完結）× 
 - アカウントの **Anthropic use case フォーム提出**と **Opus 4.8 の契約作成**（初回のみ。[poc-checklist.md](poc-checklist.md) 参照）
 - 利用者用 IAM ユーザー + jp. 限定ポリシー（[infra/main.tf](../infra/main.tf)）
 - Bedrock API キーの発行（`scripts/10-issue-api-key.sh`。有効期限つき）
+- **利用者ごとのアプリケーション推論プロファイル**（コスト配賦用。次節参照）
+
+## 0.5. 利用者ごとのプロファイル作成（運用者・コスト配賦用）
+
+Bedrock のオンデマンド推論はリソース非依存の課金のため、**誰がいくら使ったか**を割り出すには
+利用者ごとにタグ付きアプリケーション推論プロファイルを作り、各自にその ARN を使わせる。
+API キーは共有のままでよい（課金は「呼び出したプロファイル」に付いた `user` タグで集計される）。
+プロファイル自体は無償で、jp. の +10% プレミアムや推論先（東京+大阪）は元プロファイルを継承する。
+
+利用者 1 名につき **Opus 4.8（主力）＋ Haiku 4.5（軽量）の 2 本**を作る。命名は `cc-<user>-opus` /
+`cc-<user>-haiku`（プロファイル名にドットは使えないので `.` は `-` に置換）。
+
+```bash
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+REGION=ap-northeast-1
+OPUS_SRC="arn:aws:bedrock:${REGION}:${ACCOUNT_ID}:inference-profile/jp.anthropic.claude-opus-4-8"
+HAIKU_SRC="arn:aws:bedrock:${REGION}:${ACCOUNT_ID}:inference-profile/jp.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+# 利用者を列挙（IAM ユーザー名と一致させると監査しやすい）
+for U in takeshi.ohno riku.ibaraki takashi.kuwabara daisuke.kawashima yusuke.kobayashi hiroyuki.eguchi; do
+  N=$(echo "$U" | tr '.' '-')   # プロファイル名はドット不可
+  aws bedrock create-inference-profile --region "$REGION" \
+    --inference-profile-name "cc-${N}-opus" \
+    --model-source copyFrom="$OPUS_SRC" \
+    --tags key=user,value=$U key=app,value=claude-code key=model,value=opus \
+    --query 'inferenceProfileArn' --output text | sed "s|^|${U} opus: |"
+  aws bedrock create-inference-profile --region "$REGION" \
+    --inference-profile-name "cc-${N}-haiku" \
+    --model-source copyFrom="$HAIKU_SRC" \
+    --tags key=user,value=$U key=app,value=claude-code key=model,value=haiku \
+    --query 'inferenceProfileArn' --output text | sed "s|^|${U} haiku: |"
+done
+```
+
+- **タグ**: `user`（集計軸・IAM ユーザー名に合わせる）/ `app=claude-code`（他用途と分離。**キー通知の
+  Lambda はこのタグでプロファイルを列挙する**）/ `model`（opus・haiku の内訳）
+- **`--description` は付けない**: ASCII の一部記号（括弧など）で ValidationException になる。不要なら省略が安全
+- 作成済み一覧: `aws bedrock list-inference-profiles --region ap-northeast-1 --type-equals APPLICATION`
+- **コスト配分タグの有効化**: `user` タグを Billing コンソール（または
+  `aws ce update-cost-allocation-tags-status --cost-allocation-tags-status TagKey=user,Status=Active`）で
+  有効化する。**新しいタグキーはそのタグ付きの課金が一度発生してからでないと認識されない**（遡及もしない）。
+  `user` が既に Active なら即集計可能
+- **集計**: `aws ce get-cost-and-usage --time-period Start=YYYY-MM-01,End=YYYY-MM-DD --granularity MONTHLY --metrics UnblendedCost --filter '{"Tags":{"Key":"app","Values":["claude-code"]}}' --group-by Type=TAG,Key=user`
+- **限界（性善説）**: 各自が自分の ARN を設定する前提。強制はできない（厳密に分けたいなら利用者ごとに API キー＝IAM プリンシパルを分ける）。各自に配る ARN はキー通知（Teams）に同梱される（[rotate_key.py](../lambda/rotate_key.py)）
+
+> Opus 5 について: Marketplace 契約済みでも、現時点で **jp.（国内完結）プロファイルは未提供**
+> （`jp.anthropic.claude-opus-5` は存在しない。あるのは `global.` のみ）。国内完結を維持するため
+> Opus 4.8 を使う。jp. が提供されたら `OPUS_SRC` を差し替えて同手順で追加できる。
 
 ## 1. 利用者の設定
 

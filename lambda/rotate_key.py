@@ -35,6 +35,8 @@ HAIKU_MODEL_ID = os.environ.get("HAIKU_MODEL_ID", "jp.anthropic.claude-haiku-4-5
 AWS_REGION_FOR_USERS = os.environ.get("AWS_REGION_FOR_USERS", "ap-northeast-1")
 DOCS_URL = os.environ.get("DOCS_URL", "https://github.com/Challenge-Consulting-Firm/editor-claude-bedrock/tree/main/docs")
 SERVICE = "bedrock.amazonaws.com"
+# コスト配賦用ユーザ別プロファイルをこのタグ値で列挙する（setup-claude-code.md §0.5 で付与）
+USER_PROFILE_APP_TAG = os.environ.get("USER_PROFILE_APP_TAG", "claude-code")
 
 ROTATION_MESSAGE_TEMPLATE = (
     "【エディタ用 Claude (Bedrock)】{heading}\n"
@@ -81,8 +83,68 @@ ROTATION_MESSAGE_TEMPLATE = (
     "VS Code: setup-vscode.md\n"
     "Zed: setup-zed.md\n"
     "\n"
+    "{per_user}"
     "{footer}"
 )
+
+PER_USER_SECTION_TEMPLATE = (
+    "──────────────────\n"
+    "■ 利用者ごとの設定値（コスト配賦・各自の分をコピー）\n"
+    "──────────────────\n"
+    "\n"
+    "自分のユーザ名の行だけを設定してください。\n"
+    "・ANTHROPIC_MODEL              ← Opus の ARN\n"
+    "・ANTHROPIC_SMALL_FAST_MODEL   ← Haiku の ARN\n"
+    "\n"
+    "{rows}\n"
+    "\n"
+)
+
+
+def build_per_user_section() -> str:
+    """app=claude-code タグの付いたアプリ推論プロファイルを列挙し、利用者別の ARN 対応表を作る。
+
+    プロファイルは setup-claude-code.md §0.5 の手順で user/app/model タグ付きで作成される。
+    列挙に失敗しても通知本体（キー配布）は止めない — 対応表は補助情報のため。
+    """
+    try:
+        users = collect_user_profiles()
+    except Exception as exc:  # noqa: BLE001 - 対応表の取得失敗で通知を落とさない
+        logger.warning("利用者別プロファイルの列挙に失敗（対応表は省略）: %s", exc)
+        return ""
+    if not users:
+        return ""
+
+    rows = []
+    for user in sorted(users):
+        arns = users[user]
+        rows.append(
+            f"● {user}\n"
+            f"  Opus : {arns.get('opus', '(未作成)')}\n"
+            f"  Haiku: {arns.get('haiku', '(未作成)')}"
+        )
+    return PER_USER_SECTION_TEMPLATE.format(rows="\n\n".join(rows))
+
+
+def collect_user_profiles() -> dict:
+    """{user: {"opus": arn, "haiku": arn}} を返す。タグは ListTagsForResource で引く。"""
+    result: dict[str, dict[str, str]] = {}
+    paginator = bedrock.get_paginator("list_inference_profiles")
+    for page in paginator.paginate(typeEquals="APPLICATION"):
+        for profile in page.get("inferenceProfileSummaries", []):
+            arn = profile["inferenceProfileArn"]
+            tags = {
+                t["key"]: t["value"]
+                for t in bedrock.list_tags_for_resource(resourceARN=arn).get("tags", [])
+            }
+            if tags.get("app") != USER_PROFILE_APP_TAG:
+                continue
+            user = tags.get("user")
+            model = tags.get("model")
+            if not user or model not in ("opus", "haiku"):
+                continue
+            result.setdefault(user, {})[model] = arn
+    return result
 
 
 def build_message(key: str, *, rotated: bool) -> str:
@@ -94,6 +156,7 @@ def build_message(key: str, *, rotated: bool) -> str:
         sonnet_arn=SONNET_PROFILE_ARN or "(運用者に確認)",
         haiku_id=HAIKU_MODEL_ID,
         docs_url=DOCS_URL,
+        per_user=build_per_user_section(),
         footer=(
             "旧キーは次回ローテーション（1週間後）で削除されます。1週間以内に貼り替えてください。"
             if rotated
@@ -103,6 +166,7 @@ def build_message(key: str, *, rotated: bool) -> str:
 
 iam = boto3.client("iam")
 ssm = boto3.client("ssm")
+bedrock = boto3.client("bedrock")
 
 
 def handler(event, context):  # noqa: ARG001
