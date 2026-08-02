@@ -42,6 +42,40 @@ for U in takeshi.ohno riku.ibaraki takashi.kuwabara daisuke.kawashima yusuke.kob
 done
 ```
 
+<details>
+<summary>PowerShell 版（Windows・未実測）</summary>
+
+同じ内容を PowerShell で。`--tags` の指定形式は OS 非依存だが、変数展開とループ構文が異なる。
+
+```powershell
+$ACCOUNT_ID = aws sts get-caller-identity --query Account --output text
+$REGION = "ap-northeast-1"
+$OPUS_SRC = "arn:aws:bedrock:${REGION}:${ACCOUNT_ID}:inference-profile/jp.anthropic.claude-opus-4-8"
+$HAIKU_SRC = "arn:aws:bedrock:${REGION}:${ACCOUNT_ID}:inference-profile/jp.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+# 利用者を列挙（IAM ユーザー名と一致させると監査しやすい）
+$users = @("takeshi.ohno","riku.ibaraki","takashi.kuwabara","daisuke.kawashima","yusuke.kobayashi","hiroyuki.eguchi")
+foreach ($U in $users) {
+  $N = $U.Replace(".", "-")   # プロファイル名はドット不可
+  $opus = aws bedrock create-inference-profile --region $REGION `
+    --inference-profile-name "cc-$N-opus" `
+    --model-source copyFrom="$OPUS_SRC" `
+    --tags key=user,value=$U key=app,value=claude-code key=model,value=opus `
+    --query 'inferenceProfileArn' --output text
+  Write-Output "$U opus: $opus"
+  $haiku = aws bedrock create-inference-profile --region $REGION `
+    --inference-profile-name "cc-$N-haiku" `
+    --model-source copyFrom="$HAIKU_SRC" `
+    --tags key=user,value=$U key=app,value=claude-code key=model,value=haiku `
+    --query 'inferenceProfileArn' --output text
+  Write-Output "$U haiku: $haiku"
+}
+```
+
+> バッククォート（`` ` ``）は PowerShell の行継続文字。`--tags` は `key=...,value=...` を
+> スペース区切りで並べる（bash と同一）。
+</details>
+
 - **タグ**: `user`（集計軸・IAM ユーザー名に合わせる）/ `app=claude-code`（他用途と分離。**キー通知の
   Lambda はこのタグでプロファイルを列挙する**）/ `model`（opus・haiku の内訳）
 - **`--description` は付けない**: ASCII の一部記号（括弧など）で ValidationException になる。不要なら省略が安全
