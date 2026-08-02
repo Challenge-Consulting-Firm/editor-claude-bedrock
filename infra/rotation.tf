@@ -53,6 +53,15 @@ data "aws_iam_policy_document" "rotate_key" {
     resources = [aws_ssm_parameter.teams_webhook.arn]
   }
   statement {
+    # Teams 通知に同梱する利用者別プロファイル対応表を作るための列挙（読み取りのみ）
+    sid = "ListUserInferenceProfiles"
+    actions = [
+      "bedrock:ListInferenceProfiles",
+      "bedrock:ListTagsForResource",
+    ]
+    resources = ["*"]
+  }
+  statement {
     sid       = "Logs"
     actions   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:*"]
