@@ -99,6 +99,10 @@ resource "aws_lambda_function" "report_usage" {
       METRIC_NAMESPACE   = "AWS/Bedrock"
       COST_TAG_KEY       = "Project"
       COST_TAG_VALUE     = "editor-claude-bedrock"
+      # 利用者別内訳: app=claude-code を user タグでグループ化（setup-claude-code.md §0.5）
+      USER_TAG_KEY       = "user"
+      USER_APP_TAG_KEY   = "app"
+      USER_APP_TAG_VALUE = "claude-code"
       REPORT_DAYS        = "7"
       MONTHLY_BUDGET_USD = tostring(var.monthly_budget_usd)
       MODELS_JSON        = jsonencode(local.report_models)
