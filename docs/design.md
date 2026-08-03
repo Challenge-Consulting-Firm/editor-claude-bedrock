@@ -108,8 +108,12 @@ Bedrock では IAM で**技術的に強制**する（[infra/main.tf](../infra/ma
     Opus 4.8 / Sonnet 4.6 / Haiku 4.5 の 3 本を配備済み。エディタ/CLI は ARN を model に指定する（実測済み）
   - ⚠️ 制約: **Zed の組み込みモデル（エージェント用 Sonnet 4.6）はシステム jp. プロファイル直なのでタグ配賦されない**
     （Cost Explorer では「Bedrock 全体 −（タグ付き合計）」として把握）。Claude Code は ARN 指定でフル配賦可能
-  - 初回のみ: 課金データにタグが現れた後（利用開始から最大 24h）、コスト配分タグを有効化する:
-    `aws ce update-cost-allocation-tags-status --cost-allocation-tags-status TagKey=Project,Status=Active TagKey=Phase,Status=Active`
+  - 初回のみ: 課金データにタグが現れた後（利用開始から最大 24h）、コスト配分タグを有効化する。
+    プロジェクト全体は `Project` / `Phase`、**利用者別内訳には `user` / `app` も**有効化する（遡及しない＝有効化日以降の課金のみ集計対象）:
+    `aws ce update-cost-allocation-tags-status --cost-allocation-tags-status TagKey=Project,Status=Active TagKey=Phase,Status=Active TagKey=user,Status=Active TagKey=app,Status=Active`
+  - ⚠️ Cost Explorer 上、Bedrock 推論は `Amazon Bedrock` ではなく `Claude Opus 4.8 (Amazon Bedrock Edition)` 等の
+    **モデル別サービス名**で計上される。SERVICE=`Amazon Bedrock` で絞ると $0 になるため、利用者別はタグで集計する
+  - 管理者が随時コスト・監査を確認するコマンド集は [cost-admin-checks.md](cost-admin-checks.md) に集約
   - Azure 版 KQL 相当の「ユーザー別集計」は本番化で Model invocation logging（CloudWatch Logs/S3）を追加して実装
 - **週次利用状況レポート（実装）**: EventBridge Scheduler（月曜 09:30 JST）→ Lambda → Teams。
   CloudWatch Metrics（`AWS/Bedrock`）でモデル別トークン消費量＋概算費用、Cost Explorer でタグ配賦の実コスト

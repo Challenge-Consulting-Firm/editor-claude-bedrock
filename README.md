@@ -113,11 +113,17 @@ cp .env.sample .env        # .env は .gitignore 済み。値を実値に置き�
   **ハードストップ（Azure 版の disableLocalAuth 相当）は本番化スコープ**（[docs/design.md](docs/design.md) §7）
 - **週次レポート**: 毎週月曜 09:30 JST に Teams へトークン消費量（モデル別）+ 概算費用 + 実コスト（タグ配賦）を投稿
   （[infra/usage_report.tf](infra/usage_report.tf) / [lambda/report_usage.py](lambda/report_usage.py)）。
-  実コスト集計には事前にコスト配分タグ（`Project` / `Phase`）の有効化が必要
-  （`aws ce update-cost-allocation-tags-status ...`。詳細は [docs/design.md](docs/design.md) §6）
+  実コスト集計には事前にコスト配分タグの有効化が必要（プロジェクト全体は `Project` / `Phase`、利用者別内訳は
+  `user` / `app`。`aws ce update-cost-allocation-tags-status ...`。詳細は [docs/design.md](docs/design.md) §6）
+- **手元での随時確認**: [docs/cost-admin-checks.md](docs/cost-admin-checks.md) に管理者向けチェックコマンド集
+  （利用者別・モデル別コスト、residency 監査、予算消化）をまとめてある
+- ⚠️ **Cost Explorer の落とし穴**: Bedrock 推論は `Amazon Bedrock` ではなく `Claude Opus 4.8 (Amazon Bedrock Edition)`
+  のような**モデル別サービス名**で計上される。サービス名 `Amazon Bedrock` で絞ると常に $0 になるため、
+  利用者別に見るときは**タグ（`user` / `app`）で集計**する（詳細は上記チェック集）
 
 ## ドキュメント
 
 - [docs/design.md](docs/design.md) — PoC アーキテクチャ・IAM 統制設計・キー運用・本番化 TODO
 - [docs/poc-checklist.md](docs/poc-checklist.md) — 検証手順・判定基準・**実測記録（正）**
+- [docs/cost-admin-checks.md](docs/cost-admin-checks.md) — 管理者向けコスト・監査チェックコマンド集（利用者別/モデル別コスト・residency・予算）
 - [docs/setup-claude-code.md](docs/setup-claude-code.md) / [docs/setup-zed.md](docs/setup-zed.md) / [docs/setup-vscode.md](docs/setup-vscode.md) — エディタ/CLI 設定手順（各ページ末尾に Windows 差分あり・未実測）
