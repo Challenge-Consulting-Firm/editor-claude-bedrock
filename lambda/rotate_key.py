@@ -28,11 +28,8 @@ USER_NAME = os.environ["POC_USER_NAME"]
 KEY_AGE_DAYS = int(os.environ.get("KEY_AGE_DAYS", "15"))
 API_KEY_PARAM = os.environ["API_KEY_PARAM"]
 WEBHOOK_PARAM = os.environ["WEBHOOK_PARAM"]
-# 利用者向け設定値（キーと違って不変なので毎回の投稿に同梱する）
-OPUS_PROFILE_ARN = os.environ.get("OPUS_PROFILE_ARN", "")
-SONNET_PROFILE_ARN = os.environ.get("SONNET_PROFILE_ARN", "")
-HAIKU_MODEL_ID = os.environ.get("HAIKU_MODEL_ID", "jp.anthropic.claude-haiku-4-5-20251001-v1:0")
-AWS_REGION_FOR_USERS = os.environ.get("AWS_REGION_FOR_USERS", "ap-northeast-1")
+# モデルの ARN は利用者ごとに異なる（コスト配賦）ため下の per-user 表で配る。
+# リージョン等の共通固定値は手順書側に記載し、通知には同梱しない。
 DOCS_URL = os.environ.get("DOCS_URL", "https://github.com/Challenge-Consulting-Firm/editor-claude-bedrock/tree/main/docs")
 SERVICE = "bedrock.amazonaws.com"
 # コスト配賦用ユーザ別プロファイルをこのタグ値で列挙する（setup-claude-code.md §0.5 で付与）
@@ -51,28 +48,7 @@ ROTATION_MESSAGE_TEMPLATE = (
     "\n"
     "{key}\n"
     "\n"
-    "──────────────────\n"
-    "■ 設定に貼る値（固定・変更なし）\n"
-    "──────────────────\n"
-    "\n"
-    "● リージョン（AWS_REGION / ZED_AWS_REGION）\n"
-    "{region}\n"
-    "\n"
-    "● 主力モデル Opus 4.8（ANTHROPIC_MODEL / Zed モデル name）\n"
-    "{opus_arn}\n"
-    "\n"
-    "● 軽量モデル（ANTHROPIC_SMALL_FAST_MODEL / ANTHROPIC_DEFAULT_HAIKU_MODEL）\n"
-    "{haiku_id}\n"
-    "\n"
-    "──────────────────\n"
-    "■ 参考：切替で使える値（固定設定には貼りません）\n"
-    "──────────────────\n"
-    "\n"
-    "● 節約モデル Sonnet 4.6\n"
-    "Claude Code は  --model jp.anthropic.claude-sonnet-4-6  で都度切替。\n"
-    "Zed はエージェント用の組み込み「Claude Sonnet 4.6」を利用。\n"
-    "{sonnet_arn}\n"
-    "\n"
+    "{per_user}"
     "──────────────────\n"
     "■ 手順書（初回セットアップ）\n"
     "──────────────────\n"
@@ -83,18 +59,19 @@ ROTATION_MESSAGE_TEMPLATE = (
     "VS Code: setup-vscode.md\n"
     "Zed: setup-zed.md\n"
     "\n"
-    "{per_user}"
     "{footer}"
 )
 
 PER_USER_SECTION_TEMPLATE = (
     "──────────────────\n"
-    "■ 利用者ごとの設定値（コスト配賦・各自の分をコピー）\n"
+    "■ 利用者ごとのモデル設定値（コスト配賦・各自の分だけコピー）\n"
     "──────────────────\n"
     "\n"
-    "自分のユーザ名の行だけを設定してください。\n"
-    "・ANTHROPIC_MODEL              ← Opus の ARN\n"
-    "・ANTHROPIC_SMALL_FAST_MODEL   ← Haiku の ARN\n"
+    "自分のユーザ名の行の2つの ARN を、下記に設定してください。\n"
+    "・Opus の ARN\n"
+    "    Claude Code → ANTHROPIC_MODEL ／ Zed → モデルの name 欄\n"
+    "・Haiku の ARN\n"
+    "    Claude Code → ANTHROPIC_SMALL_FAST_MODEL と ANTHROPIC_DEFAULT_HAIKU_MODEL\n"
     "\n"
     "{rows}\n"
     "\n"
@@ -151,10 +128,6 @@ def build_message(key: str, *, rotated: bool) -> str:
     return ROTATION_MESSAGE_TEMPLATE.format(
         heading="APIキーをローテーションしました" if rotated else "現在の接続設定のご案内（キーの変更はありません）",
         key=key,
-        region=AWS_REGION_FOR_USERS,
-        opus_arn=OPUS_PROFILE_ARN or "(運用者に確認)",
-        sonnet_arn=SONNET_PROFILE_ARN or "(運用者に確認)",
-        haiku_id=HAIKU_MODEL_ID,
         docs_url=DOCS_URL,
         per_user=build_per_user_section(),
         footer=(

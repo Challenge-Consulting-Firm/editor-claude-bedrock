@@ -89,11 +89,8 @@ resource "aws_lambda_function" "rotate_key" {
       KEY_AGE_DAYS  = tostring(var.rotation_key_age_days)
       API_KEY_PARAM = local.api_key_param_name
       WEBHOOK_PARAM = local.webhook_param_name
-      # Teams 投稿に同梱する利用者向け設定値（キーと違い不変。コピペで設定完了できるように）
-      OPUS_PROFILE_ARN     = aws_bedrock_inference_profile.editor["opus-4-8"].arn
-      SONNET_PROFILE_ARN   = aws_bedrock_inference_profile.editor["sonnet-4-6"].arn
-      HAIKU_MODEL_ID       = local.app_profile_models["haiku-4-5"]
-      AWS_REGION_FOR_USERS = var.aws_region
+      # モデル ARN は利用者ごとに異なるため Lambda が実行時にタグから列挙し、
+      # per-user 表として通知に同梱する（共通固定値は手順書側に記載）
     }
   }
 }
