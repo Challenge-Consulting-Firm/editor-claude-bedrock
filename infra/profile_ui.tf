@@ -39,16 +39,22 @@ data "aws_iam_policy_document" "profile_ui" {
 
   # 作成: コピー元は jp. システムプロファイル、作成先は application-inference-profile。
   # TagResource はタグ付き作成に付随して必要。
+  # ⚠️ 実測（2026-08-06）: CreateInferenceProfile はコピー元 jp. プロファイルが束ねる
+  #    foundation-model（東京+大阪、account なしの ARN）への権限も要求する。これが無いと
+  #    ap-northeast-3 の foundation-model で AccessDeniedException になる（main.tf の invoke 側と同構図）。
   statement {
     sid = "CreateProfiles"
     actions = [
       "bedrock:CreateInferenceProfile",
       "bedrock:TagResource",
     ]
-    resources = [
-      "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:application-inference-profile/*",
-      "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/jp.*",
-    ]
+    resources = concat(
+      [
+        "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:application-inference-profile/*",
+        "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/jp.*",
+      ],
+      [for r in local.jp_inference_regions : "arn:aws:bedrock:${r}::foundation-model/*"],
+    )
   }
 
   # 削除: 作成したアプリケーション推論プロファイルのみ
