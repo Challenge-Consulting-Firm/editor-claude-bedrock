@@ -65,6 +65,20 @@ data "aws_iam_policy_document" "profile_ui" {
     resources = ["*"]
   }
 
+  # API キー表示: 新旧クレデンシャルのメタ一覧（本文は含まない）を IAM から読む。
+  statement {
+    sid       = "ListPocUserApiKeys"
+    actions   = ["iam:ListServiceSpecificCredentials"]
+    resources = [aws_iam_user.poc.arn]
+  }
+
+  # API キー本文: rotate_key が保管した現行キー（SSM SecureString）を読む
+  statement {
+    sid       = "ReadApiKey"
+    actions   = ["ssm:GetParameter"]
+    resources = ["arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.api_key_param_name}"]
+  }
+
   statement {
     sid       = "Logs"
     actions   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
@@ -92,6 +106,9 @@ resource "aws_lambda_function" "profile_ui" {
       ENTRA_TENANT_ID      = var.entra_tenant_id
       ENTRA_CLIENT_ID      = var.entra_client_id
       USER_PROFILE_APP_TAG = "claude-code"
+      # API キー表示用: rotate_key と同じ PoC ユーザ / SSM パラメータを参照する
+      POC_USER_NAME = aws_iam_user.poc.name
+      API_KEY_PARAM = local.api_key_param_name
     }
   }
 }

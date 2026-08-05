@@ -15,10 +15,11 @@ AWS CLI 手動作成だった運用を置き換える（列挙・タグ規約は
   API Gateway (HTTP API・$default) ──▶ Lambda editor-claude-bedrock-profile-ui
     ├ GET  /            SPA(HTML) を返す（無認証）
     ├ GET  /api/config  MSAL 用の tenantId/clientId（無認証）
-    └ /api/profiles     GET/POST/DELETE。Authorization: Bearer <JWT> 必須
-         │ entra_auth が JWKS 署名検証（tid=テナント一致で認可）
-         ▼
-      bedrock:CreateInferenceProfile / DeleteInferenceProfile / ListInferenceProfiles
+    ├ /api/profiles     GET/POST/DELETE。Authorization: Bearer <JWT> 必須
+    │    │ entra_auth が JWKS 署名検証（tid=テナント一致で認可）
+    │    ▼
+    │  bedrock:CreateInferenceProfile / DeleteInferenceProfile / ListInferenceProfiles
+    └ GET /api/apikey   現行キー本文(SSM) + 新旧クレデンシャルのメタ一覧(IAM)。Bearer <JWT> 必須
 ```
 
 - **認証**: SPA が EntraID からアクセストークンを取得し、API 呼び出しの `Authorization: Bearer` で送る。
@@ -96,6 +97,15 @@ apply 後、出力 `profile_ui_url`（API Gateway の URL）が UI の URL。
 3. 利用者名（例 `takeshi.ohno`。IAM ユーザー名／`user` タグに合わせる）を入れて **作成**
    → Opus 4.8 と Haiku 4.5 の 2 本がタグ付きで作られる（既存分はスキップ＝冪等）
 4. 行の **削除** で当該利用者の `app=claude-code` プロファイルを全削除
+5. **プロファイル ARN はクリックでクリップボードにコピー**できる（利用者への配布・貼り付け用）
+6. 上部 **「Bedrock API キー」** に、週次ローテ（[rotate_key.py](../lambda/rotate_key.py)）が保管した
+   **現行キー本文**（クリックでコピー）と、IAM 上の**新旧クレデンシャルのメタ一覧**（ID・状態・作成日・
+   有効期限）が並ぶ。⚠️ **旧キーの本文は表示されない**（IAM は発行時しか secret を返さず、SSM は
+   現行キーのみ上書き保管するため）。本文が「未保管」表示のときは初回ローテ前
+
+> ⚠️ **キー本文は同一テナントのサインインユーザー全員に見える**（認可は tid 一致のみ）。
+> Teams の利用者限定チャネル配布より露出範囲が広い点に留意。特定グループに絞るなら
+> [entra_auth.py](../lambda/entra_auth.py) で `groups` / `roles` の追加検証を入れる
 
 作成された ARN は従来どおり週次キーローテ通知（Teams）に利用者別対応表として同梱される
 （[rotate_key.py](../lambda/rotate_key.py) が同じタグで列挙）。
