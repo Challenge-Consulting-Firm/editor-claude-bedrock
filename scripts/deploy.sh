@@ -8,7 +8,7 @@ set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
 require_cmd aws terraform
-require_var OPS_EMAIL MONTHLY_BUDGET_USD POC_USER_NAME TEAMS_WEBHOOK_URL
+require_var OPS_EMAIL MONTHLY_BUDGET_USD POC_USER_NAME TEAMS_WEBHOOK_URL ENTRA_TENANT_ID ENTRA_CLIENT_ID
 
 if [[ "$OPS_EMAIL" == "ops@example.com" ]]; then
   echo "ERROR: OPS_EMAIL がサンプル値のままです。実メールに置き換えてください" >&2
@@ -23,6 +23,8 @@ export TF_VAR_poc_user_name="$POC_USER_NAME"
 export TF_VAR_monthly_budget_usd="$MONTHLY_BUDGET_USD"
 export TF_VAR_ops_email="$OPS_EMAIL"
 export TF_VAR_teams_webhook_url="$TEAMS_WEBHOOK_URL"
+export TF_VAR_entra_tenant_id="$ENTRA_TENANT_ID"
+export TF_VAR_entra_client_id="$ENTRA_CLIENT_ID"
 # 任意: .env に ALLOWED_IPS（カンマ区切り）があれば JSON リストにして渡す
 if [[ -n "${ALLOWED_IPS:-}" ]]; then
   TF_VAR_allowed_ips=$(printf '%s' "$ALLOWED_IPS" | jq -R 'split(",") | map(if test("/") then . else . + "/32" end)')

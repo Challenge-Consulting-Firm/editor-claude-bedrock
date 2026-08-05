@@ -127,3 +127,4 @@ cp .env.sample .env        # .env は .gitignore 済み。値を実値に置き�
 - [docs/poc-checklist.md](docs/poc-checklist.md) — 検証手順・判定基準・**実測記録（正）**
 - [docs/cost-admin-checks.md](docs/cost-admin-checks.md) — 管理者向けコスト・監査チェックコマンド集（利用者別/モデル別コスト・residency・予算）
 - [docs/setup-claude-code.md](docs/setup-claude-code.md) / [docs/setup-zed.md](docs/setup-zed.md) / [docs/setup-vscode.md](docs/setup-vscode.md) — エディタ/CLI 設定手順（各ページ末尾に Windows 差分あり・未実測）
+- [docs/setup-profile-ui.md](docs/setup-profile-ui.md) — 利用者プロファイル管理 Web UI（Lambda + EntraID 認証）のアプリ登録・デプロイ・使い方

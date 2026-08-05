@@ -33,6 +33,16 @@ variable "rotation_key_age_days" {
   default     = 15
 }
 
+variable "entra_tenant_id" {
+  description = "EntraID テナント ID（profile_ui の JWT 検証と MSAL の authority に使う）"
+  type        = string
+}
+
+variable "entra_client_id" {
+  description = "EntraID に登録した SPA アプリの（アプリケーション）クライアント ID。profile_ui の aud 検証と MSAL の clientId に使う"
+  type        = string
+}
+
 variable "allowed_ips" {
   description = "任意: 接続元グローバル IP の allowlist（CIDR）。空なら IP 制限なし（PoC 既定）。本番化では必須（Azure 版 R2 相当）"
   type        = list(string)
