@@ -5,6 +5,10 @@
 **表示・作成・削除**するための管理 UI。従来 [setup-claude-code.md](setup-claude-code.md) §0.5 の
 AWS CLI 手動作成だった運用を置き換える（列挙・タグ規約は [lambda/rotate_key.py](../lambda/rotate_key.py) と同一）。
 
+**利用者向けの単一ハブ**でもある: 現行 Bedrock API キー・自分のモデル ARN（Opus / Haiku）・
+各エディタのセットアップ手順リンクをここに集約した。週次 Teams 通知はこのポータル URL の案内のみを投稿する
+（キー本文・ARN 対応表は通知に載せない）。
+
 ## 構成
 
 ```
@@ -107,8 +111,9 @@ apply 後、出力 `profile_ui_url`（API Gateway の URL）が UI の URL。
 > Teams の利用者限定チャネル配布より露出範囲が広い点に留意。特定グループに絞るなら
 > [entra_auth.py](../lambda/entra_auth.py) で `groups` / `roles` の追加検証を入れる
 
-作成された ARN は従来どおり週次キーローテ通知（Teams）に利用者別対応表として同梱される
-（[rotate_key.py](../lambda/rotate_key.py) が同じタグで列挙）。
+作成された ARN は**このポータル上で本人がコピーする**（利用者・モデル別の ARN 一覧を表示）。
+週次キーローテ通知（Teams）は、キー本文や ARN 対応表を同梱せず**ポータル URL の案内のみ**を投稿する
+（[rotate_key.py](../lambda/rotate_key.py)）。キー・ARN・セットアップ手順はすべてポータルに集約した。
 
 ## 注意
 

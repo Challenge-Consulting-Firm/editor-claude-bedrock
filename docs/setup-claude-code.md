@@ -85,7 +85,7 @@ foreach ($U in $users) {
   有効化する。**新しいタグキーはそのタグ付きの課金が一度発生してからでないと認識されない**（遡及もしない）。
   `user` が既に Active なら即集計可能
 - **集計**: `aws ce get-cost-and-usage --time-period Start=YYYY-MM-01,End=YYYY-MM-DD --granularity MONTHLY --metrics UnblendedCost --filter '{"Tags":{"Key":"app","Values":["claude-code"]}}' --group-by Type=TAG,Key=user`
-- **限界（性善説）**: 各自が自分の ARN を設定する前提。強制はできない（厳密に分けたいなら利用者ごとに API キー＝IAM プリンシパルを分ける）。各自に配る ARN はキー通知（Teams）に同梱される（[rotate_key.py](../lambda/rotate_key.py)）
+- **限界（性善説）**: 各自が自分の ARN を設定する前提。強制はできない（厳密に分けたいなら利用者ごとに API キー＝IAM プリンシパルを分ける）。各自の ARN は**利用者ポータル**（[profile_ui.py](../lambda/profile_ui.py)）で本人が認証後にコピーする（週次 Teams 通知はポータル URL の案内のみ）
 
 > Opus 5 について: Marketplace 契約済みでも、現時点で **jp.（国内完結）プロファイルは未提供**
 > （`jp.anthropic.claude-opus-5` は存在しない。あるのは `global.` のみ）。国内完結を維持するため
@@ -93,9 +93,9 @@ foreach ($U in $users) {
 
 ## 1. 利用者の設定
 
-**キーは Teams のローテ通知に記載された「新しいキー」をコピーする**（毎週月曜 09:00 JST に自動投稿。
-Azure 版と同じチャネル）。旧キーは次回ローテで削除されるため、通知が来たら 1 週間以内に貼り替えること。
-運用者は SSM からも取得できる:
+**キーは利用者ポータルの「現行キー本文」をコピーする**（週次 Teams 通知の URL からポータルを開き、
+EntraID サインイン後にコピー）。キーは毎週月曜 09:00 JST に自動ローテーションされ、旧キーは次回ローテで
+削除されるため、通知が来たら 1 週間以内に貼り替えること。運用者は SSM からも取得できる:
 `aws ssm get-parameter --name /editor-claude-bedrock/api-key --with-decryption --query Parameter.Value --output text`
 
 受け取ったキーをシェルまたは `~/.claude/settings.json` に設定する。
