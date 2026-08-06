@@ -85,6 +85,14 @@ data "aws_iam_policy_document" "profile_ui" {
     resources = ["arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.api_key_param_name}"]
   }
 
+  # 利用者別コスト表示: Cost Explorer をタグ（app=claude-code を user で集計）で読む。
+  # Cost Explorer は Resource 単位の制限をサポートしないため resources は "*"（読み取りのみ）。
+  statement {
+    sid       = "ReadCostByUser"
+    actions   = ["ce:GetCostAndUsage"]
+    resources = ["*"]
+  }
+
   statement {
     sid       = "Logs"
     actions   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]

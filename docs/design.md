@@ -128,6 +128,8 @@ PoC の 3 点が通ったら、Azure 版で作った防御一式をここへ移�
 - [x] **R1**: 週次キーローテ自動化 — **実装・実測済み（2026-07-14）**。EventBridge Scheduler（月曜 09:00 JST）
       → Lambda（最古キー削除 → 新キー発行・期限 15 日 → SSM SecureString 保管 → Teams 投稿）。
       Azure 版と同じく旧キーは 1 世代（1 週間）温存、Teams 投稿失敗は関数ごと失敗させて検知可能にする。
+      **Teams 投稿は利用者ポータル（profile_ui）URL の案内のみ**で、キー本文・モデル ARN は載せない
+      （本人が認証後にポータルで閲覧・コピーする）。
       ⚠️ 運用注意: webhook URL は**署名（sig）付きの完全な URL** を使うこと（不完全だと 401。実測で踏んだ）
 - [ ] **R3 ハード**: Budget 100% 実績 → Lambda でキー無効化（`update-service-specific-credential --status Inactive`）。
       Azure 版 `disableLocalAuth` 相当。復旧 runbook も移植

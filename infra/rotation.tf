@@ -52,15 +52,8 @@ data "aws_iam_policy_document" "rotate_key" {
     actions   = ["ssm:GetParameter"]
     resources = [aws_ssm_parameter.teams_webhook.arn]
   }
-  statement {
-    # Teams 通知に同梱する利用者別プロファイル対応表を作るための列挙（読み取りのみ）
-    sid = "ListUserInferenceProfiles"
-    actions = [
-      "bedrock:ListInferenceProfiles",
-      "bedrock:ListTagsForResource",
-    ]
-    resources = ["*"]
-  }
+  # 利用者別 ARN 対応表は Teams から利用者ポータル（profile_ui）へ移したため、
+  # rotate_key での推論プロファイル列挙権限（ListInferenceProfiles / ListTagsForResource）は不要になった。
   statement {
     sid       = "Logs"
     actions   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
@@ -89,8 +82,8 @@ resource "aws_lambda_function" "rotate_key" {
       KEY_AGE_DAYS  = tostring(var.rotation_key_age_days)
       API_KEY_PARAM = local.api_key_param_name
       WEBHOOK_PARAM = local.webhook_param_name
-      # モデル ARN は利用者ごとに異なるため Lambda が実行時にタグから列挙し、
-      # per-user 表として通知に同梱する（共通固定値は手順書側に記載）
+      # Teams 通知は利用者ポータルの URL 案内のみ。キー本文・モデル ARN・手順はポータルに集約する。
+      APP_URL = aws_apigatewayv2_stage.profile_ui.invoke_url
     }
   }
 }

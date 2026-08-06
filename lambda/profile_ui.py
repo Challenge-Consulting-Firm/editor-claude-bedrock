@@ -16,6 +16,7 @@ API:
   POST   /api/profiles        {"user": "..."} で当該利用者の opus+haiku を作成（既存はスキップ）
   DELETE /api/profiles        {"user": "..."} で当該利用者の全プロファイルを削除
   GET    /api/apikey          現行 Bedrock API キー本文 + 新旧 credential のメタ一覧を返す
+  GET    /api/cost            Cost Explorer から今月の利用者別コスト（app=claude-code を user で集計）を返す
   それ以外の GET              SPA(HTML) を返す
 """
 
@@ -23,6 +24,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime, timedelta, timezone
 
 import boto3
 from botocore.exceptions import ClientError
@@ -41,6 +43,10 @@ APP_TAG_VALUE = os.environ.get("USER_PROFILE_APP_TAG", "claude-code")
 POC_USER_NAME = os.environ.get("POC_USER_NAME", "")
 API_KEY_PARAM = os.environ.get("API_KEY_PARAM", "")
 BEDROCK_CREDENTIAL_SERVICE = "bedrock.amazonaws.com"
+# 利用者別コスト集計（report_usage.py と同じタグ規約）: app=claude-code を user タグで GroupBy する。
+USER_TAG_KEY = os.environ.get("USER_TAG_KEY", "user")
+USER_APP_TAG_KEY = os.environ.get("USER_APP_TAG_KEY", "app")
+USER_APP_TAG_VALUE = APP_TAG_VALUE
 
 # 作成対象モデル（inference-profiles.tf / setup-claude-code.md §0.5 と一致させる）。
 # model タグ値 -> コピー元 jp. システムプロファイル ID
@@ -56,6 +62,8 @@ _USER_RE = re.compile(r"^[a-z0-9._-]{1,64}$")
 bedrock = boto3.client("bedrock", region_name=AWS_REGION)
 iam = boto3.client("iam")
 ssm = boto3.client("ssm")
+# Cost Explorer は us-east-1 固定のグローバルサービス
+ce = boto3.client("ce", region_name="us-east-1")
 
 _account_id = None
 
@@ -169,6 +177,58 @@ def collect_api_key() -> dict:
     return result
 
 
+def collect_cost_by_user() -> dict:
+    """今月（当月1日〜当日）の利用者別コストを {"month","currency","total","users":[{user,amount}],"unallocated"} で返す。
+
+    report_usage.get_cost_by_user と同じ集計（app=<APP_TAG_VALUE> を user タグで GroupBy）。
+    user タグが空（未配賦: タグ有効化前・課金反映前・タグなし呼出）の分は unallocated に集約する。
+    Cost Explorer の TimePeriod.End は排他なので当日を含めるため翌日を指定する。
+    """
+    now = datetime.now(timezone.utc)
+    start = now.replace(day=1).strftime("%Y-%m-%d")
+    # Cost Explorer の TimePeriod.End は排他。当日分を含めるため翌日を End にする
+    # （月初=当日でも期間が空にならない）
+    end = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    by_user: dict[str, float] = {}
+    token = None
+    while True:
+        kwargs = dict(
+            TimePeriod={"Start": start, "End": end},
+            Granularity="MONTHLY",
+            Metrics=["UnblendedCost"],
+            Filter={"Tags": {"Key": USER_APP_TAG_KEY, "Values": [USER_APP_TAG_VALUE]}},
+            GroupBy=[{"Type": "TAG", "Key": USER_TAG_KEY}],
+        )
+        if token:
+            kwargs["NextPageToken"] = token
+        resp = ce.get_cost_and_usage(**kwargs)
+        for period in resp.get("ResultsByTime", []):
+            for grp in period.get("Groups", []):
+                # Keys は ["user$takeshi.ohno"] 形式。空値は "user$"
+                raw = grp["Keys"][0]
+                user = raw.split("$", 1)[1] if "$" in raw else raw
+                amount = float(grp["Metrics"]["UnblendedCost"]["Amount"])
+                by_user[user] = by_user.get(user, 0.0) + amount
+        token = resp.get("NextPageToken")
+        if not token:
+            break
+
+    unallocated = by_user.pop("", 0.0)
+    users = [
+        {"user": u, "amount": round(v, 2)}
+        for u, v in sorted(by_user.items(), key=lambda kv: kv[1], reverse=True)
+    ]
+    total = sum(by_user.values()) + unallocated
+    return {
+        "month": now.strftime("%Y-%m"),
+        "currency": "USD",
+        "users": users,
+        "unallocated": round(unallocated, 2),
+        "total": round(total, 2),
+    }
+
+
 # ---- HTTP ヘルパ -------------------------------------------------------------
 
 
@@ -228,6 +288,17 @@ def handler(event, context):  # noqa: ARG001
         except ClientError as exc:
             logger.exception("API キー取得失敗")
             return _resp(502, {"error": f"API キー取得に失敗: {exc.response['Error'].get('Code', 'Unknown')}"})
+
+    if path == "/api/cost":
+        if method != "GET":
+            return _resp(405, {"error": "許可されていないメソッド"})
+        try:
+            logger.info("利用者別コスト参照: caller=%s", caller)
+            return _resp(200, collect_cost_by_user())
+        except ClientError as exc:
+            # user/app のコスト配分タグ未有効化・権限不足でも UI 全体は落とさない
+            logger.warning("利用者別コスト取得失敗: %s", exc.response["Error"].get("Code"))
+            return _resp(502, {"error": f"コスト取得に失敗: {exc.response['Error'].get('Code', 'Unknown')}"})
 
     if path == "/api/profiles":
         try:
@@ -347,6 +418,12 @@ INDEX_HTML = """<!DOCTYPE html>
   .badge.cur { background: var(--muji-red); color: #fff; }
   .badge.active { background: var(--kinari); color: var(--muji-red); border: 1px solid var(--beige); }
   .badge.inactive { background: var(--gray-200); color: var(--text-tertiary); }
+
+  /* セットアップ手順のリンク集 */
+  ul.docs { list-style: none; padding: 0; margin: 1rem 0 0; }
+  ul.docs li { padding: .55rem 0; border-bottom: 1px solid var(--gray-200); font-size: .9rem; }
+  ul.docs a { color: var(--muji-red); text-decoration: none; font-weight: 600; }
+  ul.docs a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -391,6 +468,26 @@ INDEX_HTML = """<!DOCTYPE html>
       <thead><tr><th>利用者</th><th>プロファイル ARN（クリックでコピー）</th><th></th></tr></thead>
       <tbody id="rows"><tr><td colspan="3" class="muted">読み込み中…</td></tr></tbody>
     </table>
+  </div>
+
+  <div class="section">
+    <h2>利用者別コスト（今月）</h2>
+    <p class="muted">Cost Explorer のタグ配賦（<code>app=claude-code</code> を <code>user</code> で集計）による今月の実コストです。
+      課金反映は最大 24 時間遅れます。Zed 組み込みモデルなどタグなしの呼び出しは含まれません。</p>
+    <div id="cost" class="card"><span class="muted">読み込み中…</span></div>
+  </div>
+
+  <div class="section">
+    <h2>セットアップ手順</h2>
+    <p class="muted">各エディタの初回セットアップ手順です。上のキー・ARN をコピーして貼り付けてください。</p>
+    <ul class="docs">
+      <li><a href="https://github.com/Challenge-Consulting-Firm/editor-claude-bedrock/blob/main/docs/setup-claude-code.md" target="_blank" rel="noopener">Claude Code CLI</a>
+        <span class="muted">— ANTHROPIC_MODEL に Opus の ARN、ANTHROPIC_SMALL_FAST_MODEL / ANTHROPIC_DEFAULT_HAIKU_MODEL に Haiku の ARN</span></li>
+      <li><a href="https://github.com/Challenge-Consulting-Firm/editor-claude-bedrock/blob/main/docs/setup-vscode.md" target="_blank" rel="noopener">VS Code（Claude Code 拡張）</a>
+        <span class="muted">— 環境変数 AWS_BEARER_TOKEN_BEDROCK にキー、ANTHROPIC_MODEL に Opus の ARN</span></li>
+      <li><a href="https://github.com/Challenge-Consulting-Firm/editor-claude-bedrock/blob/main/docs/setup-zed.md" target="_blank" rel="noopener">Zed</a>
+        <span class="muted">— 設定の Bedrock API Key 欄にキー、available_models の name に Opus の ARN</span></li>
+    </ul>
   </div>
 </div>
 </div>
@@ -446,6 +543,7 @@ function render() {
 function reloadAll() {
   loadApiKey();
   loadProfiles();
+  loadCost();
 }
 
 // クリップボードコピー（要素の data-copy を使う。フォールバックあり）。
@@ -576,6 +674,41 @@ function fmtDate(iso) {
   const p = (n) => String(n).padStart(2, "0");
   return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) +
     " " + p(d.getHours()) + ":" + p(d.getMinutes());
+}
+
+// 今月の利用者別コストを描画
+async function loadCost() {
+  const box = document.getElementById("cost");
+  box.innerHTML = '<span class="muted">読み込み中…</span>';
+  try {
+    const data = await api("GET", null, "/api/cost");
+    const cur = data.currency === "USD" ? "$" : "";
+    const money = (v) => cur + Number(v).toFixed(2);
+    let html = '<p class="muted" style="margin-top:0">対象月: ' + esc(data.month) + "</p>";
+    html += '<table style="margin-top:.5rem"><thead><tr><th>利用者</th><th style="text-align:right">コスト</th></tr></thead><tbody>';
+    if (data.users && data.users.length) {
+      for (const u of data.users) {
+        html += "<tr><td><strong>" + esc(u.user) + "</strong></td>" +
+          '<td style="text-align:right">' + esc(money(u.amount)) + "</td></tr>";
+      }
+    } else {
+      html += '<tr><td colspan="2" class="muted">配賦対象のコストはまだありません</td></tr>';
+    }
+    if (data.unallocated > 0) {
+      html += '<tr><td class="muted">(未配賦)</td>' +
+        '<td class="muted" style="text-align:right">' + esc(money(data.unallocated)) + "</td></tr>";
+    }
+    html += "<tr><td><strong>合計</strong></td>" +
+      '<td style="text-align:right"><strong>' + esc(money(data.total)) + "</strong></td></tr>";
+    html += "</tbody></table>";
+    if (data.unallocated > 0) {
+      html += '<p class="muted" style="margin-bottom:0">※ (未配賦) = user タグ有効化前・課金反映前（最大24h）・タグなし呼び出し（Zed 組み込みモデル等）の合算</p>';
+    }
+    box.innerHTML = html;
+  } catch (e) {
+    box.innerHTML = '<span class="muted">—</span>';
+    showMsg("コストの読み込み失敗: " + e.message, false);
+  }
 }
 
 async function loadProfiles() {

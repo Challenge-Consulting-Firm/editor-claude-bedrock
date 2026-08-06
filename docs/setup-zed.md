@@ -136,8 +136,8 @@ setx ZED_AWS_REGION ap-northeast-1
 ### API キー
 
 Settings → AI → LLM Providers → **Amazon Bedrock** → Bedrock API Key 欄に
-**Teams のローテ通知のキー**を貼る（keychain に保管される）。
-キーは毎週月曜 09:00 JST にローテーションされるため、通知が来たら **Reset Key → 新キーを貼り直す**。
+**利用者ポータルの「現行キー本文」**を貼る（keychain に保管される。ポータルは Teams 通知の URL から開く）。
+キーは毎週月曜 09:00 JST にローテーションされるため、通知が来たら **Reset Key → ポータルの新キーを貼り直す**。
 
 ## 3. 動作確認
 
