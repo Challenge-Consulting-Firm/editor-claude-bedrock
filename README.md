@@ -129,8 +129,9 @@ cp .env.sample .env        # .env は .gitignore 済み。値を実値に置き�
   （[infra/usage_report.tf](infra/usage_report.tf) / [lambda/report_usage.py](lambda/report_usage.py)）。
   実コスト集計には事前にコスト配分タグの有効化が必要（プロジェクト全体は `Project` / `Phase`、利用者別内訳は
   `user` / `app`。`aws ce update-cost-allocation-tags-status ...`。詳細は [docs/design.md](docs/design.md) §6）
-- **利用者本人での確認**: 利用者ポータル（[lambda/profile_ui.py](lambda/profile_ui.py)）に「利用者別コスト（今月）」を表示。
-  EntraID サインイン後、`user` タグ（`app=claude-code`）で集計した当月コストを本人が確認できる
+- **利用者本人での確認**: 利用者ポータル（[lambda/profile_ui.py](lambda/profile_ui.py)）に「利用者別コスト」を表示。
+  EntraID サインイン後、`user` タグ（`app=claude-code`）で集計したコストを本人が確認できる。
+  **月次（今月）** と **週次（過去4週間・◀▶ でスライド）** をタブで切り替え可能
 - **手元での随時確認**: [docs/cost-admin-checks.md](docs/cost-admin-checks.md) に管理者向けチェックコマンド集
   （利用者別・モデル別コスト、residency 監査、予算消化）をまとめてある
 - ⚠️ **Cost Explorer の落とし穴**: Bedrock 推論は `Amazon Bedrock` ではなく `Claude Opus 4.8 (Amazon Bedrock Edition)`
