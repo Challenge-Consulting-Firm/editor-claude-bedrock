@@ -15,7 +15,8 @@ resource "aws_iam_user" "poc" {
 }
 
 data "aws_iam_policy_document" "jp_only_invoke" {
-  # (a) jp. 推論プロファイルそのものへの呼び出し + コスト配賦用アプリケーション推論プロファイル
+  # (a-1) jp. システム推論プロファイルそのものへの呼び出し。
+  #       Zed 組み込みモデル（jp. 直指定）など、コスト配賦タグを介さない経路のために残す。
   statement {
     sid = "AllowInvokeJpInferenceProfile"
     actions = [
@@ -24,11 +25,31 @@ data "aws_iam_policy_document" "jp_only_invoke" {
       "bedrock:Converse",
       "bedrock:ConverseStream",
     ]
-    resources = concat(
-      local.jp_profile_arn_patterns,
-      # アプリケーション推論プロファイル（inference-profiles.tf）。中身は jp. の複製なので国内完結は保たれる
-      ["arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:application-inference-profile/*"],
-    )
+    resources = local.jp_profile_arn_patterns
+  }
+
+  # (a-2) コスト配賦用アプリケーション推論プロファイル。中身は jp. の複製なので国内完結は保たれる。
+  #       ⚠️ user タグが付いたプロファイル（cc-<user>-*）だけを許可する。これにより
+  #       user タグの無い共有プロファイル（editor-claude-* / 他アプリの clock-in-out-* 等）経由の
+  #       呼び出しを一律ブロックし、コスト配賦を user タグ付きに一本化する。
+  #       - タグ条件は Service Authorization Reference で InvokeModel* × application-inference-profile
+  #         がサポートすると確認済み。IAM ポリシーシミュレータで tag 有→allow / tag 無→deny を実測（2026-08-06）。
+  #       - 共有プロファイルは削除しない（report_usage.py の CloudWatch メトリクス基盤として存続）。invoke だけ塞ぐ。
+  #       - 単一共有キーのため「各自が自分の cc- のみ」の強制は不可（design.md §運用者メモ）。共有排除までが到達点。
+  statement {
+    sid = "AllowInvokeUserTaggedAppProfileOnly"
+    actions = [
+      "bedrock:InvokeModel",
+      "bedrock:InvokeModelWithResponseStream",
+      "bedrock:Converse",
+      "bedrock:ConverseStream",
+    ]
+    resources = ["arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:application-inference-profile/*"]
+    condition {
+      test     = "Null"
+      variable = "aws:ResourceTag/user"
+      values   = ["false"] # false = 「タグが null ではない」= user タグが存在するものだけ許可
+    }
   }
 
   # (b) プロファイルが内部でルーティングする先の foundation-model（東京・大阪のみ）。
