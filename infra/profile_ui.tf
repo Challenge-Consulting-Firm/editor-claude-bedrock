@@ -39,16 +39,22 @@ data "aws_iam_policy_document" "profile_ui" {
 
   # 作成: コピー元は jp. システムプロファイル、作成先は application-inference-profile。
   # TagResource はタグ付き作成に付随して必要。
+  # ⚠️ 実測（2026-08-06）: CreateInferenceProfile はコピー元 jp. プロファイルが束ねる
+  #    foundation-model（東京+大阪、account なしの ARN）への権限も要求する。これが無いと
+  #    ap-northeast-3 の foundation-model で AccessDeniedException になる（main.tf の invoke 側と同構図）。
   statement {
     sid = "CreateProfiles"
     actions = [
       "bedrock:CreateInferenceProfile",
       "bedrock:TagResource",
     ]
-    resources = [
-      "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:application-inference-profile/*",
-      "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/jp.*",
-    ]
+    resources = concat(
+      [
+        "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:application-inference-profile/*",
+        "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/jp.*",
+      ],
+      [for r in local.jp_inference_regions : "arn:aws:bedrock:${r}::foundation-model/*"],
+    )
   }
 
   # 削除: 作成したアプリケーション推論プロファイルのみ
@@ -63,6 +69,20 @@ data "aws_iam_policy_document" "profile_ui" {
     sid       = "WhoAmI"
     actions   = ["sts:GetCallerIdentity"]
     resources = ["*"]
+  }
+
+  # API キー表示: 新旧クレデンシャルのメタ一覧（本文は含まない）を IAM から読む。
+  statement {
+    sid       = "ListPocUserApiKeys"
+    actions   = ["iam:ListServiceSpecificCredentials"]
+    resources = [aws_iam_user.poc.arn]
+  }
+
+  # API キー本文: rotate_key が保管した現行キー（SSM SecureString）を読む
+  statement {
+    sid       = "ReadApiKey"
+    actions   = ["ssm:GetParameter"]
+    resources = ["arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.api_key_param_name}"]
   }
 
   statement {
@@ -92,6 +112,9 @@ resource "aws_lambda_function" "profile_ui" {
       ENTRA_TENANT_ID      = var.entra_tenant_id
       ENTRA_CLIENT_ID      = var.entra_client_id
       USER_PROFILE_APP_TAG = "claude-code"
+      # API キー表示用: rotate_key と同じ PoC ユーザ / SSM パラメータを参照する
+      POC_USER_NAME = aws_iam_user.poc.name
+      API_KEY_PARAM = local.api_key_param_name
     }
   }
 }
