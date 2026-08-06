@@ -23,7 +23,7 @@
 | 軸 | Azure（稼働中） | Bedrock（本 PoC） |
 |---|---|---|
 | 国内完結 | ❌ 実測で不可（DataZone/APAC 止まり） | ✅ 見込み: `jp.` プロファイルで東京+大阪に限定（**+10% プレミアム**） |
-| 迂回防止 | deployment 名の運用規約のみ | **IAM ポリシーで `jp.` 以外を拒否**（本リポジトリの Terraform で実装） |
+| 迂回防止 | deployment 名の運用規約のみ | **IAM ポリシーで `jp.` 以外を拒否**（本リポジトリの Terraform で実装）+ **コスト配賦を `user` タグ付きプロファイルに一本化**（共有プロファイルの invoke を遮断） |
 | 監査 | KQL（利用量） | **CloudTrail の `inferenceRegion` で実処理リージョンを事後監査** |
 | エディタからキー利用 | ✅ 実証済み（api-key） | △ **要実測**: OpenAI 互換エンドポイント + Bedrock API キー（Bearer） |
 | モデル | gpt-5.2（APAC） | Claude Opus 4.8（国内完結・見込み） |
@@ -62,6 +62,13 @@
     「今動いた」は契約済みの証明にならない — 使うモデルは最初に全部契約しておくこと）
 11. Claude Code CLI の「model is not available on your bedrock deployment」表示は誤解を招く
     — 実体は上記 9/10 の 404/403（`ANTHROPIC_LOG=debug` で実エラーを確認できる）
+12. **`InvokeModel*` は application-inference-profile に対し `aws:ResourceTag/${TagKey}` 条件をサポートする**
+    （2026-08-06 実測）。これを使い「`user` タグが存在するプロファイル（`cc-<user>-*`）だけ invoke 許可」
+    （`Null: {"aws:ResourceTag/user": "false"}`）とすることで、`user` タグの無い共有プロファイル
+    （`editor-claude-*`）経由の呼び出しを一律遮断できる。IAM ポリシーシミュレータで tag 有→allow /
+    tag 無→deny を確認済み（[infra/main.tf](infra/main.tf) の `AllowInvokeUserTaggedAppProfileOnly`）。
+    ただし PoC は共有 IAM ユーザー 1 つ（`editor-claude-poc`）のため「各自が自分の `cc-` だけ」の強制は不可 —
+    「共有プロファイルを全員に使わせない」までが到達点（完全な利用者別強制は利用者別 IAM キーが前提）
 
 **帰結**: OpenAI 互換直結は不可だが、**ネイティブ Bedrock 対応クライアントなら直結できる**ことを実測で確認 —
 Claude Code CLI / VS Code 拡張（`CLAUDE_CODE_USE_BEDROCK`）と Zed（ネイティブ Bedrock プロバイダ）で成立。
@@ -86,7 +93,9 @@ cp .env.sample .env        # .env は .gitignore 済み。値を実値に置き�
 ./scripts/deploy.sh        # terraform init → plan → 確認 → apply
 ```
 
-作られるもの: PoC 用 IAM ユーザー（`jp.` プロファイル以外の推論を拒否するポリシー付き）、月次 Budget（50/75/90% 通知）。
+作られるもの: PoC 用 IAM ユーザー（`jp.` プロファイル以外の推論を拒否 + `user` タグ付きプロファイルのみ許可するポリシー付き）、
+月次 Budget（50/75/90% 通知）、週次キーローテーション（毎週月曜 09:00 JST・Teams へ**利用者ポータルの URL を案内**）、
+週次利用量レポート（月曜 09:30 JST・Teams）、利用者プロファイル管理ポータル（Lambda + EntraID 認証）。
 
 ### 2. PoC 実測（番号順に実行）
 
@@ -105,6 +114,11 @@ cp .env.sample .env        # .env は .gitignore 済み。値を実値に置き�
 [docs/setup-vscode.md](docs/setup-vscode.md) の手順で各 1 回実測し、
 結果を [docs/poc-checklist.md](docs/poc-checklist.md) に記録する。
 
+> **キーとモデル ARN の配布は利用者ポータルに集約済み**: 毎週月曜の Teams 通知はポータル URL の案内のみ
+> （キー本文・ARN 対応表・手順は載せない）。利用者は EntraID サインイン後、ポータルで**現行キー本文**と
+> **自分の `cc-<user>-*` プロファイル ARN** をコピーする（[docs/setup-profile-ui.md](docs/setup-profile-ui.md)）。
+> コスト配賦統制により、共有 `editor-claude-*` プロファイルは invoke できない（各自の `cc-` を使うこと）。
+
 ## コストの目安
 
 - Opus 4.8: **$6 入力 / $30 出力**（per 1M トークン・AWS 料金表 2026-07 実測）。`jp.` プロファイルは **+10%** → 実効 **$6.6 / $33.0**
@@ -115,6 +129,8 @@ cp .env.sample .env        # .env は .gitignore 済み。値を実値に置き�
   （[infra/usage_report.tf](infra/usage_report.tf) / [lambda/report_usage.py](lambda/report_usage.py)）。
   実コスト集計には事前にコスト配分タグの有効化が必要（プロジェクト全体は `Project` / `Phase`、利用者別内訳は
   `user` / `app`。`aws ce update-cost-allocation-tags-status ...`。詳細は [docs/design.md](docs/design.md) §6）
+- **利用者本人での確認**: 利用者ポータル（[lambda/profile_ui.py](lambda/profile_ui.py)）に「利用者別コスト（今月）」を表示。
+  EntraID サインイン後、`user` タグ（`app=claude-code`）で集計した当月コストを本人が確認できる
 - **手元での随時確認**: [docs/cost-admin-checks.md](docs/cost-admin-checks.md) に管理者向けチェックコマンド集
   （利用者別・モデル別コスト、residency 監査、予算消化）をまとめてある
 - ⚠️ **Cost Explorer の落とし穴**: Bedrock 推論は `Amazon Bedrock` ではなく `Claude Opus 4.8 (Amazon Bedrock Edition)`
