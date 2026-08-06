@@ -17,6 +17,7 @@ API:
   DELETE /api/profiles        {"user": "..."} で当該利用者の全プロファイルを削除
   GET    /api/apikey          現行 Bedrock API キー本文 + 新旧 credential のメタ一覧を返す
   GET    /api/cost            Cost Explorer から今月の利用者別コスト（app=claude-code を user で集計）を返す
+                             ?range=weekly で過去4週間分（各7日）の週次内訳を新しい週順に返す
   それ以外の GET              SPA(HTML) を返す
 """
 
@@ -177,25 +178,19 @@ def collect_api_key() -> dict:
     return result
 
 
-def collect_cost_by_user() -> dict:
-    """今月（当月1日〜当日）の利用者別コストを {"month","currency","total","users":[{user,amount}],"unallocated"} で返す。
+def _fetch_cost_by_user(start: str, end: str, granularity: str) -> list:
+    """[start, end) を granularity で GroupBy=user 集計し、期間ごとの {"period_start","by_user"} 一覧を返す。
 
     report_usage.get_cost_by_user と同じ集計（app=<APP_TAG_VALUE> を user タグで GroupBy）。
-    user タグが空（未配賦: タグ有効化前・課金反映前・タグなし呼出）の分は unallocated に集約する。
-    Cost Explorer の TimePeriod.End は排他なので当日を含めるため翌日を指定する。
+    user タグが空（未配賦: タグ有効化前・課金反映前・タグなし呼出）の分は "" キーに寄る。
+    Cost Explorer の TimePeriod.End は排他なので、呼び出し側が当日を含めるには翌日を End にする。
     """
-    now = datetime.now(timezone.utc)
-    start = now.replace(day=1).strftime("%Y-%m-%d")
-    # Cost Explorer の TimePeriod.End は排他。当日分を含めるため翌日を End にする
-    # （月初=当日でも期間が空にならない）
-    end = (now + timedelta(days=1)).strftime("%Y-%m-%d")
-
-    by_user: dict[str, float] = {}
+    periods: dict[str, dict[str, float]] = {}
     token = None
     while True:
         kwargs = dict(
             TimePeriod={"Start": start, "End": end},
-            Granularity="MONTHLY",
+            Granularity=granularity,
             Metrics=["UnblendedCost"],
             Filter={"Tags": {"Key": USER_APP_TAG_KEY, "Values": [USER_APP_TAG_VALUE]}},
             GroupBy=[{"Type": "TAG", "Key": USER_TAG_KEY}],
@@ -204,16 +199,23 @@ def collect_cost_by_user() -> dict:
             kwargs["NextPageToken"] = token
         resp = ce.get_cost_and_usage(**kwargs)
         for period in resp.get("ResultsByTime", []):
+            p_start = period.get("TimePeriod", {}).get("Start", start)
+            bucket = periods.setdefault(p_start, {})
             for grp in period.get("Groups", []):
                 # Keys は ["user$takeshi.ohno"] 形式。空値は "user$"
                 raw = grp["Keys"][0]
                 user = raw.split("$", 1)[1] if "$" in raw else raw
                 amount = float(grp["Metrics"]["UnblendedCost"]["Amount"])
-                by_user[user] = by_user.get(user, 0.0) + amount
+                bucket[user] = bucket.get(user, 0.0) + amount
         token = resp.get("NextPageToken")
         if not token:
             break
+    return [{"period_start": ps, "by_user": periods[ps]} for ps in sorted(periods)]
 
+
+def _summarize(by_user: dict[str, float]) -> dict:
+    """{user: amount} を UI 向けの {"users":[{user,amount}],"unallocated","total"} に整形する。"""
+    by_user = dict(by_user)
     unallocated = by_user.pop("", 0.0)
     users = [
         {"user": u, "amount": round(v, 2)}
@@ -221,12 +223,70 @@ def collect_cost_by_user() -> dict:
     ]
     total = sum(by_user.values()) + unallocated
     return {
-        "month": now.strftime("%Y-%m"),
-        "currency": "USD",
         "users": users,
         "unallocated": round(unallocated, 2),
         "total": round(total, 2),
     }
+
+
+def collect_cost_by_user() -> dict:
+    """今月（当月1日〜当日）の利用者別コストを {"month","currency","total","users":[{user,amount}],"unallocated"} で返す。"""
+    now = datetime.now(timezone.utc)
+    start = now.replace(day=1).strftime("%Y-%m-%d")
+    # Cost Explorer の TimePeriod.End は排他。当日分を含めるため翌日を End にする
+    # （月初=当日でも期間が空にならない）
+    end = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    buckets = _fetch_cost_by_user(start, end, "MONTHLY")
+    merged: dict[str, float] = {}
+    for b in buckets:
+        for u, v in b["by_user"].items():
+            merged[u] = merged.get(u, 0.0) + v
+    return {"month": now.strftime("%Y-%m"), "currency": "USD", **_summarize(merged)}
+
+
+def collect_weekly_cost_by_user(weeks: int = 4) -> dict:
+    """直近 weeks 週間（各7日）の利用者別コストを週ごとに新しい順で返す。
+
+    今日を含む週の末日（排他 End）から 7 日ずつ遡って weeks 個の窓を作る。
+    Cost Explorer は WEEKLY 粒度を持たないため DAILY で取得し、日次を各週バケットに合算する。
+    返り値: {"currency","weeks":[{"weekStart","weekEnd","users":[...],"unallocated","total"}...]}（新しい週が先頭）。
+    """
+    now = datetime.now(timezone.utc)
+    # End は排他。当日を含めるため「明日 0時」を全体の末端にし、そこから 7 日ずつ遡る
+    end_exclusive = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = end_exclusive - timedelta(days=7 * weeks)
+
+    # 期間全体を DAILY で 1 回取得し、日次を該当週へ振り分ける（呼び出し回数を抑える）
+    daily = _fetch_cost_by_user(
+        start.strftime("%Y-%m-%d"), end_exclusive.strftime("%Y-%m-%d"), "DAILY"
+    )
+
+    # 週の境界（[week_start, week_end) を末尾側から weeks 本）
+    bounds = [
+        (end_exclusive - timedelta(days=7 * (i + 1)), end_exclusive - timedelta(days=7 * i))
+        for i in range(weeks)
+    ]
+    week_buckets: list[dict[str, float]] = [{} for _ in bounds]
+    for day in daily:
+        d = datetime.strptime(day["period_start"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        for idx, (w_start, w_end) in enumerate(bounds):
+            if w_start <= d < w_end:
+                bucket = week_buckets[idx]
+                for u, v in day["by_user"].items():
+                    bucket[u] = bucket.get(u, 0.0) + v
+                break
+
+    weeks_out = []
+    for (w_start, w_end), bucket in zip(bounds, week_buckets):
+        weeks_out.append({
+            "weekStart": w_start.strftime("%Y-%m-%d"),
+            # 表示用の週末日は排他 End の前日（=その週の最終日）
+            "weekEnd": (w_end - timedelta(days=1)).strftime("%Y-%m-%d"),
+            **_summarize(bucket),
+        })
+    # bounds は新しい順（i=0 が直近週）なのでそのまま返す
+    return {"currency": "USD", "weeks": weeks_out}
 
 
 # ---- HTTP ヘルパ -------------------------------------------------------------
@@ -293,7 +353,10 @@ def handler(event, context):  # noqa: ARG001
         if method != "GET":
             return _resp(405, {"error": "許可されていないメソッド"})
         try:
-            logger.info("利用者別コスト参照: caller=%s", caller)
+            rng = (event.get("queryStringParameters") or {}).get("range", "monthly")
+            logger.info("利用者別コスト参照: caller=%s range=%s", caller, rng)
+            if rng == "weekly":
+                return _resp(200, collect_weekly_cost_by_user())
             return _resp(200, collect_cost_by_user())
         except ClientError as exc:
             # user/app のコスト配分タグ未有効化・権限不足でも UI 全体は落とさない
@@ -419,6 +482,18 @@ INDEX_HTML = """<!DOCTYPE html>
   .badge.active { background: var(--kinari); color: var(--muji-red); border: 1px solid var(--beige); }
   .badge.inactive { background: var(--gray-200); color: var(--text-tertiary); }
 
+  /* コスト月次/週次の切替タブ */
+  .tabs { display: flex; gap: .3rem; margin-top: 1rem; border-bottom: 1px solid var(--gray-200); }
+  .tab { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0;
+    padding: .5rem .9rem; color: var(--text-secondary); font-weight: 600; margin-bottom: -1px; }
+  .tab:hover { background: var(--gray-100); }
+  .tab.active { color: var(--muji-red); border-bottom-color: var(--muji-red); }
+  /* 週スライド（過去4週間の切替）のナビ */
+  .weeknav { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: .5rem; }
+  .weeknav .label { font-weight: 700; color: var(--text-primary); }
+  .weeknav .label .sub { font-weight: 400; color: var(--text-tertiary); font-size: .82rem; margin-left: .4rem; }
+  .weeknav button { padding: .3rem .8rem; }
+
   /* セットアップ手順のリンク集 */
   ul.docs { list-style: none; padding: 0; margin: 1rem 0 0; }
   ul.docs li { padding: .55rem 0; border-bottom: 1px solid var(--gray-200); font-size: .9rem; }
@@ -471,9 +546,13 @@ INDEX_HTML = """<!DOCTYPE html>
   </div>
 
   <div class="section">
-    <h2>利用者別コスト（今月）</h2>
-    <p class="muted">Cost Explorer のタグ配賦（<code>app=claude-code</code> を <code>user</code> で集計）による今月の実コストです。
+    <h2>利用者別コスト</h2>
+    <p class="muted">Cost Explorer のタグ配賦（<code>app=claude-code</code> を <code>user</code> で集計）による実コストです。
       課金反映は最大 24 時間遅れます。Zed 組み込みモデルなどタグなしの呼び出しは含まれません。</p>
+    <div class="tabs">
+      <button type="button" class="tab active" id="tabMonthly" onclick="switchCostTab('monthly')">月次（今月）</button>
+      <button type="button" class="tab" id="tabWeekly" onclick="switchCostTab('weekly')">週次（過去4週間）</button>
+    </div>
     <div id="cost" class="card"><span class="muted">読み込み中…</span></div>
   </div>
 
@@ -676,39 +755,94 @@ function fmtDate(iso) {
     " " + p(d.getHours()) + ":" + p(d.getMinutes());
 }
 
-// 今月の利用者別コストを描画
+// コストの表示単位（monthly / weekly）と、週次の表示中インデックス（0=直近週）
+let costRange = "monthly";
+let weeklyData = null;
+let weekIndex = 0;
+
+function switchCostTab(range) {
+  if (costRange === range) return;
+  costRange = range;
+  document.getElementById("tabMonthly").classList.toggle("active", range === "monthly");
+  document.getElementById("tabWeekly").classList.toggle("active", range === "weekly");
+  loadCost();
+}
+
+// 利用者別コストの明細テーブル（月次・週次で共通）
+function renderCostTable(data, cur) {
+  const money = (v) => cur + Number(v).toFixed(2);
+  let html = '<table style="margin-top:.5rem"><thead><tr><th>利用者</th><th style="text-align:right">コスト</th></tr></thead><tbody>';
+  if (data.users && data.users.length) {
+    for (const u of data.users) {
+      html += "<tr><td><strong>" + esc(u.user) + "</strong></td>" +
+        '<td style="text-align:right">' + esc(money(u.amount)) + "</td></tr>";
+    }
+  } else {
+    html += '<tr><td colspan="2" class="muted">配賦対象のコストはまだありません</td></tr>';
+  }
+  if (data.unallocated > 0) {
+    html += '<tr><td class="muted">(未配賦)</td>' +
+      '<td class="muted" style="text-align:right">' + esc(money(data.unallocated)) + "</td></tr>";
+  }
+  html += "<tr><td><strong>合計</strong></td>" +
+    '<td style="text-align:right"><strong>' + esc(money(data.total)) + "</strong></td></tr>";
+  html += "</tbody></table>";
+  if (data.unallocated > 0) {
+    html += '<p class="muted" style="margin-bottom:0">※ (未配賦) = user タグ有効化前・課金反映前（最大24h）・タグなし呼び出し（Zed 組み込みモデル等）の合算</p>';
+  }
+  return html;
+}
+
+// 選択中のタブに応じて月次 or 週次を読み込んで描画
 async function loadCost() {
   const box = document.getElementById("cost");
   box.innerHTML = '<span class="muted">読み込み中…</span>';
   try {
-    const data = await api("GET", null, "/api/cost");
-    const cur = data.currency === "USD" ? "$" : "";
-    const money = (v) => cur + Number(v).toFixed(2);
-    let html = '<p class="muted" style="margin-top:0">対象月: ' + esc(data.month) + "</p>";
-    html += '<table style="margin-top:.5rem"><thead><tr><th>利用者</th><th style="text-align:right">コスト</th></tr></thead><tbody>';
-    if (data.users && data.users.length) {
-      for (const u of data.users) {
-        html += "<tr><td><strong>" + esc(u.user) + "</strong></td>" +
-          '<td style="text-align:right">' + esc(money(u.amount)) + "</td></tr>";
-      }
+    if (costRange === "weekly") {
+      weeklyData = await api("GET", null, "/api/cost?range=weekly");
+      weekIndex = 0;  // 読み込み直後は直近週を表示
+      renderWeekly();
     } else {
-      html += '<tr><td colspan="2" class="muted">配賦対象のコストはまだありません</td></tr>';
+      const data = await api("GET", null, "/api/cost");
+      const cur = data.currency === "USD" ? "$" : "";
+      let html = '<p class="muted" style="margin-top:0">対象月: ' + esc(data.month) + "</p>";
+      html += renderCostTable(data, cur);
+      box.innerHTML = html;
     }
-    if (data.unallocated > 0) {
-      html += '<tr><td class="muted">(未配賦)</td>' +
-        '<td class="muted" style="text-align:right">' + esc(money(data.unallocated)) + "</td></tr>";
-    }
-    html += "<tr><td><strong>合計</strong></td>" +
-      '<td style="text-align:right"><strong>' + esc(money(data.total)) + "</strong></td></tr>";
-    html += "</tbody></table>";
-    if (data.unallocated > 0) {
-      html += '<p class="muted" style="margin-bottom:0">※ (未配賦) = user タグ有効化前・課金反映前（最大24h）・タグなし呼び出し（Zed 組み込みモデル等）の合算</p>';
-    }
-    box.innerHTML = html;
   } catch (e) {
     box.innerHTML = '<span class="muted">—</span>';
     showMsg("コストの読み込み失敗: " + e.message, false);
   }
+}
+
+// 週次: 過去4週間をスライド式に 1 週ずつ表示（◀ 過去 / 未来 ▶）
+function renderWeekly() {
+  const box = document.getElementById("cost");
+  const weeks = (weeklyData && weeklyData.weeks) || [];
+  if (!weeks.length) {
+    box.innerHTML = '<p class="muted">週次の配賦対象コストはまだありません</p>';
+    return;
+  }
+  if (weekIndex < 0) weekIndex = 0;
+  if (weekIndex > weeks.length - 1) weekIndex = weeks.length - 1;
+  const w = weeks[weekIndex];
+  const cur = weeklyData.currency === "USD" ? "$" : "";
+  // weeks は新しい順（index 0 = 直近週）。◀ は過去へ（index++）、▶ は未来へ（index--）
+  const olderDisabled = weekIndex >= weeks.length - 1 ? "disabled" : "";
+  const newerDisabled = weekIndex <= 0 ? "disabled" : "";
+  const posLabel = weekIndex === 0 ? "今週" : weekIndex + " 週前";
+  let html = '<div class="weeknav">' +
+    '<button type="button" id="weekOlder" ' + olderDisabled + '>◀ 過去</button>' +
+    '<span class="label">' + esc(w.weekStart) + " 〜 " + esc(w.weekEnd) +
+    '<span class="sub">' + esc(posLabel) + "</span></span>" +
+    '<button type="button" id="weekNewer" ' + newerDisabled + ">未来 ▶</button>" +
+    "</div>";
+  html += renderCostTable(w, cur);
+  box.innerHTML = html;
+  const older = document.getElementById("weekOlder");
+  const newer = document.getElementById("weekNewer");
+  if (older) older.onclick = () => { weekIndex++; renderWeekly(); };
+  if (newer) newer.onclick = () => { weekIndex--; renderWeekly(); };
 }
 
 async function loadProfiles() {

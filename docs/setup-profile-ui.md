@@ -23,7 +23,8 @@ AWS CLI 手動作成だった運用を置き換える（列挙・タグ規約は
     │    │ entra_auth が JWKS 署名検証（tid=テナント一致で認可）
     │    ▼
     │  bedrock:CreateInferenceProfile / DeleteInferenceProfile / ListInferenceProfiles
-    └ GET /api/apikey   現行キー本文(SSM) + 新旧クレデンシャルのメタ一覧(IAM)。Bearer <JWT> 必須
+    ├ GET /api/apikey   現行キー本文(SSM) + 新旧クレデンシャルのメタ一覧(IAM)。Bearer <JWT> 必須
+    └ GET /api/cost     利用者別コスト(Cost Explorer)。既定=今月／?range=weekly で過去4週間。Bearer <JWT> 必須
 ```
 
 - **認証**: SPA が EntraID からアクセストークンを取得し、API 呼び出しの `Authorization: Bearer` で送る。
@@ -106,6 +107,9 @@ apply 後、出力 `profile_ui_url`（API Gateway の URL）が UI の URL。
    **現行キー本文**（クリックでコピー）と、IAM 上の**新旧クレデンシャルのメタ一覧**（ID・状態・作成日・
    有効期限）が並ぶ。⚠️ **旧キーの本文は表示されない**（IAM は発行時しか secret を返さず、SSM は
    現行キーのみ上書き保管するため）。本文が「未保管」表示のときは初回ローテ前
+7. **「利用者別コスト」** は **月次（今月）** と **週次（過去4週間）** をタブで切り替えられる。
+   週次は **◀ 過去 / 未来 ▶** で 1 週ずつスライドして直近 4 週分を確認できる（各週 7 日・新しい週が既定表示）。
+   いずれも `app=claude-code` を `user` タグで集計した実コストで、課金反映は最大 24 時間遅れる
 
 > ⚠️ **キー本文は同一テナントのサインインユーザー全員に見える**（認可は tid 一致のみ）。
 > Teams の利用者限定チャネル配布より露出範囲が広い点に留意。特定グループに絞るなら
