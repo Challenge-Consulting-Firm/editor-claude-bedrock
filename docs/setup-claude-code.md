@@ -17,13 +17,14 @@ Bedrock のオンデマンド推論はリソース非依存の課金のため、
 API キーは共有のままでよい（課金は「呼び出したプロファイル」に付いた `user` タグで集計される）。
 プロファイル自体は無償で、jp. の +10% プレミアムや推論先（東京+大阪）は元プロファイルを継承する。
 
-利用者 1 名につき **Opus 4.8（主力）＋ Haiku 4.5（軽量）の 2 本**を作る。命名は `cc-<user>-opus` /
-`cc-<user>-haiku`（プロファイル名にドットは使えないので `.` は `-` に置換）。
+利用者 1 名につき **Opus 4.8（主力）＋ Sonnet 4.6（節約）＋ Haiku 4.5（軽量）の 3 本**を作る。命名は `cc-<user>-opus` /
+`cc-<user>-sonnet` / `cc-<user>-haiku`（プロファイル名にドットは使えないので `.` は `-` に置換）。
 
 ```bash
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 REGION=ap-northeast-1
 OPUS_SRC="arn:aws:bedrock:${REGION}:${ACCOUNT_ID}:inference-profile/jp.anthropic.claude-opus-4-8"
+SONNET_SRC="arn:aws:bedrock:${REGION}:${ACCOUNT_ID}:inference-profile/jp.anthropic.claude-sonnet-4-6"
 HAIKU_SRC="arn:aws:bedrock:${REGION}:${ACCOUNT_ID}:inference-profile/jp.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 # 利用者を列挙（IAM ユーザー名と一致させると監査しやすい）
@@ -34,6 +35,11 @@ for U in takeshi.ohno riku.ibaraki takashi.kuwabara daisuke.kawashima yusuke.kob
     --model-source copyFrom="$OPUS_SRC" \
     --tags key=user,value=$U key=app,value=claude-code key=model,value=opus \
     --query 'inferenceProfileArn' --output text | sed "s|^|${U} opus: |"
+  aws bedrock create-inference-profile --region "$REGION" \
+    --inference-profile-name "cc-${N}-sonnet" \
+    --model-source copyFrom="$SONNET_SRC" \
+    --tags key=user,value=$U key=app,value=claude-code key=model,value=sonnet \
+    --query 'inferenceProfileArn' --output text | sed "s|^|${U} sonnet: |"
   aws bedrock create-inference-profile --region "$REGION" \
     --inference-profile-name "cc-${N}-haiku" \
     --model-source copyFrom="$HAIKU_SRC" \
@@ -51,6 +57,7 @@ done
 $ACCOUNT_ID = aws sts get-caller-identity --query Account --output text
 $REGION = "ap-northeast-1"
 $OPUS_SRC = "arn:aws:bedrock:${REGION}:${ACCOUNT_ID}:inference-profile/jp.anthropic.claude-opus-4-8"
+$SONNET_SRC = "arn:aws:bedrock:${REGION}:${ACCOUNT_ID}:inference-profile/jp.anthropic.claude-sonnet-4-6"
 $HAIKU_SRC = "arn:aws:bedrock:${REGION}:${ACCOUNT_ID}:inference-profile/jp.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 # 利用者を列挙（IAM ユーザー名と一致させると監査しやすい）
@@ -63,6 +70,12 @@ foreach ($U in $users) {
     --tags key=user,value=$U key=app,value=claude-code key=model,value=opus `
     --query 'inferenceProfileArn' --output text
   Write-Output "$U opus: $opus"
+  $sonnet = aws bedrock create-inference-profile --region $REGION `
+    --inference-profile-name "cc-$N-sonnet" `
+    --model-source copyFrom="$SONNET_SRC" `
+    --tags key=user,value=$U key=app,value=claude-code key=model,value=sonnet `
+    --query 'inferenceProfileArn' --output text
+  Write-Output "$U sonnet: $sonnet"
   $haiku = aws bedrock create-inference-profile --region $REGION `
     --inference-profile-name "cc-$N-haiku" `
     --model-source copyFrom="$HAIKU_SRC" `
@@ -77,7 +90,7 @@ foreach ($U in $users) {
 </details>
 
 - **タグ**: `user`（集計軸・IAM ユーザー名に合わせる）/ `app=claude-code`（他用途と分離。**キー通知の
-  Lambda はこのタグでプロファイルを列挙する**）/ `model`（opus・haiku の内訳）
+  Lambda はこのタグでプロファイルを列挙する**）/ `model`（opus・sonnet・haiku の内訳）
 - **`--description` は付けない**: ASCII の一部記号（括弧など）で ValidationException になる。不要なら省略が安全
 - 作成済み一覧: `aws bedrock list-inference-profiles --region ap-northeast-1 --type-equals APPLICATION`
 - **コスト配分タグの有効化**: `user` タグを Billing コンソール（または
@@ -133,8 +146,8 @@ export ANTHROPIC_DEFAULT_HAIKU_MODEL='jp.anthropic.claude-haiku-4-5-20251001-v1:
 > キー（`AWS_BEARER_TOKEN_BEDROCK`）は settings.json に書かずシェル環境変数で渡すこと
 > （設定ファイルの共有・コミット事故を防ぐ）。
 
-節約したい日常タスクは `--model jp.anthropic.claude-sonnet-4-6` への切替も可
-（jp. 対応モデルは全て IAM 許可済み。単価は Opus $6.6/$33.0（AWS 料金表 2026-07 実測）、Sonnet/Haiku は料金表に公開行がなく未確定 per 1M・jp +10% 込み）。
+節約したい日常タスクは `--model <自分の cc-<user>-sonnet ARN>` への切替も可
+（jp. 直指定 `jp.anthropic.claude-sonnet-4-6` も IAM 許可済みだが、コスト配賦するなら利用者ポータルの Sonnet ARN を使う。単価は Opus $6.6/$33.0（AWS 料金表 2026-07 実測）、Sonnet/Haiku は料金表に公開行がなく未確定 per 1M・jp +10% 込み）。
 
 ## 2. 動作確認
 

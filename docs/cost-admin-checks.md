@@ -115,7 +115,7 @@ aws bedrock list-tags-for-resource --region ap-northeast-1 \
   --query 'tags' --output table
 ```
 
-各 per-user プロファイルに `user=<氏名>` / `app=claude-code` / `model=opus|haiku` が揃っていること。
+各 per-user プロファイルに `user=<氏名>` / `app=claude-code` / `model=opus|sonnet|haiku` が揃っていること。
 
 ---
 
