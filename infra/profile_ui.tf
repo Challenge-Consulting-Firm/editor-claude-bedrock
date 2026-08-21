@@ -1,7 +1,7 @@
 # 利用者プロファイル管理 Web UI（Lambda Function URL + EntraID 認証）。
 #
 # 「ユーザプロファイル」= 利用者ごとのコスト配賦用アプリケーション推論プロファイル
-# （cc-<user>-opus / cc-<user>-haiku。docs/setup-claude-code.md §0.5 を Web UI 化）。
+# （cc-<user>-opus / cc-<user>-sonnet / cc-<user>-haiku。docs/setup-claude-code.md §0.5 を Web UI 化）。
 #
 # 構成（design.md の最小構成方針）:
 #   - Lambda 1 本が HTML(SPA) と JSON API の両方を Function URL 直で配信（API Gateway 不要）

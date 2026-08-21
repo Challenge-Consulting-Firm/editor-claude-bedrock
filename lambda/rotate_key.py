@@ -47,7 +47,7 @@ ROTATION_MESSAGE_TEMPLATE = (
     "{app_url}\n"
     "\n"
     "・現行の Bedrock API キー（クリックでコピー）\n"
-    "・自分のモデル ARN（Opus / Haiku・コスト配賦つき）\n"
+    "・自分のモデル ARN（Opus / Sonnet / Haiku・コスト配賦つき）\n"
     "・各エディタのセットアップ手順\n"
     "\n"
     "{footer}"

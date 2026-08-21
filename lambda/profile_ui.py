@@ -1,7 +1,7 @@
 """利用者プロファイル管理 Web UI（Lambda Function URL・EntraID 認証）。
 
 「ユーザプロファイル」= 利用者ごとのコスト配賦用アプリケーション推論プロファイル
-（`cc-<user>-opus` / `cc-<user>-haiku`。タグ user / app=claude-code / model 付き）。
+（`cc-<user>-opus` / `cc-<user>-sonnet` / `cc-<user>-haiku`。タグ user / app=claude-code / model 付き）。
 従来 docs/setup-claude-code.md §0.5 の AWS CLI 手動作成だったものを Web UI 化する。
 
 構成（design.md の流儀に合わせ最小構成）:
@@ -12,8 +12,8 @@
 
 API:
   GET    /api/config          MSAL 用の公開設定（tenant_id / client_id）。認証不要
-  GET    /api/profiles        app=claude-code のプロファイルを {user:{opus,haiku,...}} で返す
-  POST   /api/profiles        {"user": "..."} で当該利用者の opus+haiku を作成（既存はスキップ）
+  GET    /api/profiles        app=claude-code のプロファイルを {user:{opus,sonnet,haiku,...}} で返す
+  POST   /api/profiles        {"user": "..."} で当該利用者の opus+sonnet+haiku を作成（既存はスキップ）
   DELETE /api/profiles        {"user": "..."} で当該利用者の全プロファイルを削除
   GET    /api/apikey          現行 Bedrock API キー本文 + 新旧 credential のメタ一覧を返す
   GET    /api/cost            Cost Explorer から今月の利用者別コスト（app=claude-code を user で集計）を返す
@@ -53,6 +53,7 @@ USER_APP_TAG_VALUE = APP_TAG_VALUE
 # model タグ値 -> コピー元 jp. システムプロファイル ID
 MODEL_SOURCES = {
     "opus": "jp.anthropic.claude-opus-4-8",
+    "sonnet": "jp.anthropic.claude-sonnet-4-6",
     "haiku": "jp.anthropic.claude-haiku-4-5-20251001-v1:0",
 }
 
@@ -109,7 +110,7 @@ def collect_user_profiles() -> dict:
 
 
 def create_user_profiles(user: str) -> dict:
-    """利用者の opus/haiku プロファイルを作成。既存分はスキップ。作成後の状態を返す。"""
+    """利用者の opus/sonnet/haiku プロファイルを作成。既存分はスキップ。作成後の状態を返す。"""
     existing = collect_user_profiles().get(user, {})
     name_stem = user.replace(".", "-")  # プロファイル名にドットは使えない
     for model, src_id in MODEL_SOURCES.items():
@@ -514,7 +515,7 @@ INDEX_HTML = """<!DOCTYPE html>
 
 <div class="wrap">
 <p class="lead">利用者ごとのコスト配賦用アプリケーション推論プロファイル（<code>cc-&lt;user&gt;-opus</code> /
-<code>cc-&lt;user&gt;-haiku</code>）を管理します。作成すると Opus 4.8 と Haiku 4.5 の 2 本が
+<code>cc-&lt;user&gt;-sonnet</code> / <code>cc-&lt;user&gt;-haiku</code>）を管理します。作成すると Opus 4.8・Sonnet 4.6・Haiku 4.5 の 3 本が
 <code>user</code> / <code>app=claude-code</code> / <code>model</code> タグ付きで作られます。</p>
 
 <!-- #msg は signin/app どちらの画面でも見えるよう外に置く（初期化・サインイン失敗も表示するため） -->
@@ -561,7 +562,7 @@ INDEX_HTML = """<!DOCTYPE html>
     <p class="muted">各エディタの初回セットアップ手順です。上のキー・ARN をコピーして貼り付けてください。</p>
     <ul class="docs">
       <li><a href="https://github.com/Challenge-Consulting-Firm/editor-claude-bedrock/blob/main/docs/setup-claude-code.md" target="_blank" rel="noopener">Claude Code CLI</a>
-        <span class="muted">— ANTHROPIC_MODEL に Opus の ARN、ANTHROPIC_SMALL_FAST_MODEL / ANTHROPIC_DEFAULT_HAIKU_MODEL に Haiku の ARN</span></li>
+        <span class="muted">— ANTHROPIC_MODEL に Opus の ARN、節約時は Sonnet の ARN、ANTHROPIC_SMALL_FAST_MODEL / ANTHROPIC_DEFAULT_HAIKU_MODEL に Haiku の ARN</span></li>
       <li><a href="https://github.com/Challenge-Consulting-Firm/editor-claude-bedrock/blob/main/docs/setup-vscode.md" target="_blank" rel="noopener">VS Code（Claude Code 拡張）</a>
         <span class="muted">— 環境変数 AWS_BEARER_TOKEN_BEDROCK にキー、ANTHROPIC_MODEL に Opus の ARN</span></li>
       <li><a href="https://github.com/Challenge-Consulting-Firm/editor-claude-bedrock/blob/main/docs/setup-zed.md" target="_blank" rel="noopener">Zed</a>
