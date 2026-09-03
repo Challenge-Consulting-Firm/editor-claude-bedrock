@@ -1,20 +1,26 @@
 """週次利用状況レポート（トークン消費量 + 概算費用 + 実コスト）を Teams へ投稿。
 
 EventBridge Scheduler から毎週起動され:
-  1. CloudWatch Metrics（AWS/Bedrock）からモデル別の入出力トークン数を集計（REPORT_DAYS 日分）
-  2. トークン×単価で概算費用を算出（単価設定済みのモデルのみ）
+  1. CloudWatch Metrics（AWS/Bedrock）からモデル別の入出力・キャッシュ読み書きトークン数を
+     集計（REPORT_DAYS 日分）
+  2. トークン×単価で概算費用を算出（単価設定済みのモデルのみ）。
+     キャッシュ課金（書込 1.25× / 読取 0.1× 入力単価）も込み。実測（2026-09-03）では
+     この式が CE 実コストと一致する（2026-08-24〜08-30: 概算 $291.17 = 実コスト $291.17）
   3. Cost Explorer からタグ配賦された実コスト（週次 + 月次累計）を取得
   4. Teams へ週次レポートを投稿
 
 設計（design.md §6）:
-  - トークン数は CloudWatch Metrics が全呼出（Zed 組み込みモデル含む）を捕捉する一次情報源
-  - 実コストは Cost Explorer のタグ（Project=editor-claude-bedrock）配賦分。アプリケーション
-    推論プロファイル経由の呼出のみ反映（Zed 組み込みモデルはタグなしで抜ける = 既知の制約）
-  - 概算費用はトークンから算出し、実コストの抜け（Zed 分）と CE の最大24h遅延を補完する
+  - トークン数は CloudWatch Metrics が全呼出（Zed 組み込みモデル含む）を捕捉する一次情報源。
+    ただし CW の InputTokenCount にはキャッシュトークンが含まれず、課金の大半が
+    キャッシュ（実績: 週の 78%）のため CacheRead/CacheWriteInputTokenCount も集計する
+  - metric_ids は MODELS_JSON の静的定義（過去分のフォールバック）に加え、実行時に
+    Bedrock API で app=claude-code のアプリ推論プロファイル（cc-<user>-<model>）を列挙して
+    model タグ経由で自動併合する。ポータル（profile_ui）や手動追加での増分の取りこぼし防止
+  - 実コストは Cost Explorer のタグ（app=claude-code）配賦分。Zed 組み込みモデル等の
+    タグなし呼出は含まれない（= 概算と実コストの差の要因）
 
 前提:
-  - コスト配分タグ Project/Phase を事前に有効化しておくこと（design.md §6 の手順）
-  - モデル別 ModelId ディメンション値は初回実行で実測確認すること（env MODELS_JSON で調整可）
+  - コスト配分タグ app / user を事前に有効化しておくこと（design.md §6 の手順）
   - Teams 投稿失敗は関数ごと失敗させ、EventBridge Scheduler のリトライ/検知に乗せる（rotate_key と同じ方針）
 """
 
@@ -46,17 +52,88 @@ MONTHLY_BUDGET_USD = float(os.environ.get("MONTHLY_BUDGET_USD", "0"))
 cw = boto3.client("cloudwatch")
 ce = boto3.client("ce")
 ssm = boto3.client("ssm")
+# metric_ids 動的併合用（app=claude-code のプロファイル列挙）。profile_ui と同じパターン
+bedrock = boto3.client("bedrock", region_name=os.environ.get("AWS_REGION", "ap-northeast-1"))
+
+# プロンプトキャッシュの課金倍率（入力単価に対する倍数）。
+# 実測（2026-09-03、CE USAGE_TYPE 別単価を CW トークン数で逆算）で確認。
+_CACHE_READ_MULTIPLIER = 0.1
+_CACHE_WRITE_MULTIPLIER = 1.25
 
 
 def load_models():
-    """MODELS_JSON をパース。形式: [{"name","metric_ids":[...],"in_price":float|None,"out_price":float|None}]"""
+    """MODELS_JSON をパース。形式: [{"name","model_tag","metric_ids":[...],"in_price":float|None,"out_price":float|None}]"""
     return json.loads(os.environ.get("MODELS_JSON", "[]"))
 
 
+def discover_profile_metric_ids() -> dict:
+    """app=claude-code のアプリ推論プロファイルを列挙し {modelタグ値: [profileId, ...]} を返す。
+
+    ポータル（profile_ui）や手動作成で増えた cc-<user>-<model> を集計対象に自動で含めるためのもの。
+    Bedrock API 失敗時は空 dict を返し、MODELS_JSON の静的 metric_ids（フォールバック）のみで集計する。
+    """
+    result: dict = {}
+    try:
+        paginator = bedrock.get_paginator("list_inference_profiles")
+        for page in paginator.paginate(typeEquals="APPLICATION"):
+            for profile in page.get("inferenceProfileSummaries", []):
+                arn = profile["inferenceProfileArn"]
+                tags = {
+                    t["key"]: t["value"]
+                    for t in bedrock.list_tags_for_resource(resourceARN=arn).get("tags", [])
+                }
+                if tags.get("app") != USER_APP_TAG_VALUE:
+                    continue
+                model = tags.get("model")
+                if model:
+                    result.setdefault(model, []).append(profile["inferenceProfileId"])
+    except ClientError as exc:
+        logger.warning(
+            "プロファイル動的列挙に失敗（MODELS_JSON の静的 metric_ids のみで集計）: %s", exc
+        )
+        return {}
+    return result
+
+
+def augment_metric_ids(models) -> list:
+    """MODELS_JSON 各モデルの metric_ids に、動的発見した cc-* プロファイル ID を併合する。
+
+    model_tag（"opus" / "sonnet" / "haiku"）が対応キー。併合は重複除去つき。
+    MODELS_JSON に対応行のない model タグ（新モデルのポータル追加など）は警告を出す。
+    """
+    discovered = discover_profile_metric_ids()
+    if not discovered:
+        return models
+    known_tags = {m.get("model_tag") for m in models}
+    for tag, ids in sorted(discovered.items()):
+        if tag not in known_tags:
+            logger.warning(
+                "app=%s で model=%s タグのプロファイルに MODELS_JSON の対応行がありません（集計外）: %s",
+                USER_APP_TAG_VALUE,
+                tag,
+                ",".join(ids),
+            )
+    for m in models:
+        extra = discovered.get(m.get("model_tag"), [])
+        if extra:
+            m["metric_ids"] = list(dict.fromkeys(list(m.get("metric_ids", [])) + extra))
+            logger.info("%s: 動的発見したプロファイル %d 件を集計対象に追加", m.get("name"), len(extra))
+    return models
+
+
 def get_token_totals(model_id, start, end):
-    """指定期間の ModelId=model_id の入力/出力トークン合計を返す（Period=1日で取得して合算）。"""
+    """指定期間の ModelId=model_id のトークン合計を (入力, 出力, キャッシュ読取, キャッシュ書込) で返す。
+
+    CW の InputTokenCount にはキャッシュトークンが含まれず、課金の大半がキャッシュ分のため
+    CacheRead/CacheWriteInputTokenCount も別途取得する（Period=1日で取得して合算）。
+    """
     totals = {}
-    for metric_name, key in (("InputTokenCount", "input"), ("OutputTokenCount", "output")):
+    for metric_name, key in (
+        ("InputTokenCount", "input"),
+        ("OutputTokenCount", "output"),
+        ("CacheReadInputTokenCount", "cache_read"),
+        ("CacheWriteInputTokenCount", "cache_write"),
+    ):
         resp = cw.get_metric_statistics(
             Namespace=METRIC_NAMESPACE,
             MetricName=metric_name,
@@ -67,7 +144,7 @@ def get_token_totals(model_id, start, end):
             Statistics=["Sum"],
         )
         totals[key] = sum(dp.get("Sum", 0) for dp in resp.get("Datapoints", []))
-    return totals["input"], totals["output"]
+    return totals["input"], totals["output"], totals["cache_read"], totals["cache_write"]
 
 
 def get_cost(start_date, end_date):
@@ -169,27 +246,51 @@ def build_message(period_label, rows, weekly_cost, mtd_cost, cost_by_user=None):
         "",
         "**■ トークン消費量**（CloudWatch Metrics・全呼出含む）",
         "",
-        "| モデル | 入力 | 出力 | 概算費用 |",
-        "|:--|--:|--:|:--|",
+        "| モデル | 入力 | 出力 | キャッシュ読取 | キャッシュ書込 | 概算費用 |",
+        "|:--|--:|--:|--:|--:|:--|",
     ]
     total_input = 0
     total_output = 0
+    total_cache_read = 0
+    total_cache_write = 0
     est_total = 0.0
     est_has_any = False
+    unpriced = []
     for row in rows:
         ti, to = row["input"], row["output"]
+        tcr, tcw = row["cache_read"], row["cache_write"]
         total_input += ti
         total_output += to
+        total_cache_read += tcr
+        total_cache_write += tcw
         if row["in_price"] is not None and row["out_price"] is not None:
-            est = ti / 1_000_000 * row["in_price"] + to / 1_000_000 * row["out_price"]
+            # キャッシュ課金込み: 書込は入力単価の 1.25倍、読取は 0.1倍
+            est = (
+                ti / 1_000_000 * row["in_price"]
+                + to / 1_000_000 * row["out_price"]
+                + tcw / 1_000_000 * row["in_price"] * _CACHE_WRITE_MULTIPLIER
+                + tcr / 1_000_000 * row["in_price"] * _CACHE_READ_MULTIPLIER
+            )
             est_total += est
             est_has_any = True
             cost_str = fmt_usd(est)
         else:
             cost_str = "未設定"
-        lines.append(f"| {row['name']} | {fmt_tokens(ti)} | {fmt_tokens(to)} | {cost_str} |")
+            unpriced.append(row["name"])
+        lines.append(
+            f"| {row['name']} | {fmt_tokens(ti)} | {fmt_tokens(to)} | {fmt_tokens(tcr)} | {fmt_tokens(tcw)} | {cost_str} |"
+        )
     total_est = fmt_usd(est_total) if est_has_any else "—"
-    lines.append(f"| **合計** | **{fmt_tokens(total_input)}** | **{fmt_tokens(total_output)}** | **{total_est}** |")
+    lines.append(
+        f"| **合計** | **{fmt_tokens(total_input)}** | **{fmt_tokens(total_output)}** | "
+        f"**{fmt_tokens(total_cache_read)}** | **{fmt_tokens(total_cache_write)}** | **{total_est}** |"
+    )
+    if unpriced:
+        lines += [
+            "",
+            f"※ 概算費用は単価設定済みモデルのみ（{', '.join(unpriced)} は単価未設定のため未計上）。"
+            "全モデルの実額は下記「実コスト」を参照",
+        ]
 
     lines += [
         "",
@@ -210,7 +311,12 @@ def build_message(period_label, rows, weekly_cost, mtd_cost, cost_by_user=None):
         mtd_line = "今月累計: 取得失敗"
     # 空行で段落区切りを入れ、各行が確実に別行になるようにする
     lines += ["", weekly_line, "", mtd_line, ""]
-    lines.append("⚠️ 概算と実コストの差 = タグなし呼出（Zed 組み込みモデル等）+ CE の最大24h遅延分")
+    lines.append(
+        "⚠️ 概算費用はトークン×単価＋キャッシュ課金（読取 0.1×・書込 1.25×入力単価）の参考値。"
+        "実コストとの差は集計境界（メトリクスは直近168h vs CE は日次）と CE の最大24h反映遅延による。"
+        "実コスト・利用者別コストは app=claude-code タグ配賦分のみで、"
+        "タグなし呼出（Zed 組み込みモデル等）は含まれない"
+    )
 
     # 利用者別内訳（期間中 = 直近 REPORT_DAYS 日）
     lines += ["", *build_user_cost_lines(cost_by_user)]
@@ -224,18 +330,23 @@ def handler(event, context):  # noqa: ARG001
     ce_start = start.strftime("%Y-%m-%d")
     ce_end = (now + timedelta(days=1)).strftime("%Y-%m-%d")
 
-    # 1-2. モデル別トークン集計 + 概算費用
+    # 1-2. モデル別トークン集計（入出力 + キャッシュ読み書き）+ 概算費用。
+    # metric_ids は MODELS_JSON 静的定義 + 実行時の app=claude-code プロファイル動的列挙の併合
     rows = []
-    for m in load_models():
-        ti_sum = to_sum = 0
+    for m in augment_metric_ids(load_models()):
+        ti_sum = to_sum = tcr_sum = tcw_sum = 0
         for mid in m.get("metric_ids", []):
-            ti, to = get_token_totals(mid, start, now)
+            ti, to, tcr, tcw = get_token_totals(mid, start, now)
             ti_sum += ti
             to_sum += to
+            tcr_sum += tcr
+            tcw_sum += tcw
         rows.append({
             "name": m["name"],
             "input": ti_sum,
             "output": to_sum,
+            "cache_read": tcr_sum,
+            "cache_write": tcw_sum,
             "in_price": m.get("in_price"),
             "out_price": m.get("out_price"),
         })
