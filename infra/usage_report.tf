@@ -3,41 +3,85 @@
 # 既存の Teams webhook（rotation.tf の SSM パラメータ）を再利用。
 
 locals {
+  # 利用者別（cc-<user>-<model>）アプリ推論プロファイル ID。
+  # これらは Terraform 管理外（手動作成・メモリ 2026-08-02 の方式A）で、#11 以降エディタ/CLI の
+  # 実利用はこの cc-* プロファイル経由に一本化されている（user タグ付きのみ invoke 許可）。
+  # CloudWatch Metrics の ModelId ディメンションは、この cc-* プロファイル ID そのもので記録される
+  # （実測 2026-08-10: lukfc2db79dy / pb395raosf0q / yv7220ge2aqs 等が出現）。
+  #
+  # ⚠️ このリストは「削除済みプロファイルの過去分を拾うためのフォールバック」。
+  # 現存プロファイルは Lambda（report_usage.py）が実行時に app=claude-code で列挙して
+  # 自動併合するため、ポータル増分の追記は不要（2026-09-03 から。sonnet 追加も同時に解決）。
+  # 新規ユーザーをここに足す必要があるのは「作成→削除→過去分を遡って集計したい」場合のみ。
+  cc_profile_ids = {
+    opus = [
+      "lukfc2db79dy", # takeshi.ohno
+      "pb395raosf0q", # riku.ibaraki
+      "yv7220ge2aqs", # takashi.kuwabara
+      "rtf4lk9miwx2", # daisuke.kawashima
+      "vi3bonbhiz4e", # yusuke.kobayashi
+      "nhitr7ukojpv", # hiroyuki.eguchi
+    ]
+    sonnet = [
+      "gybbubhb3gum", # takeshi.ohno
+      "wcjv53mdszvv", # riku.ibaraki
+      "9hrsookqweix", # takashi.kuwabara
+      "ssv4daziy1sw", # daisuke.kawashima
+      "m9lhprni8fhv", # yusuke.kobayashi
+      "5djxutm106di", # hiroyuki.eguchi
+    ]
+    haiku = [
+      "ps3qb3yiseyf", # takeshi.ohno
+      "i148uog172qx", # riku.ibaraki
+      "ag0coeargks9", # takashi.kuwabara
+      "rndy9tr9pvj5", # daisuke.kawashima
+      "d19cdw6v9vmp", # yusuke.kobayashi
+      "p669eotr5ist", # hiroyuki.eguchi
+    ]
+  }
+
   # 概算費用算出用モデル定義。
-  # metric_ids は CloudWatch Metrics の ModelId ディメンションに実測で現れた値を並べる。
-  # 実測（2026-07-15）で、エディタがアプリ推論プロファイル ARN 経由で呼んだ場合のトークンは
-  # jp. システムプロファイル ID ではなく「アプリ推論プロファイル ID（ランダム文字列）」で記録される
-  # （例: Opus の 283k トークンは jp.anthropic.claude-opus-4-8=24k / app-profile=axtyxbjqdms4=283k）。
-  # 両方を並べて合算しないと実利用の大部分を取りこぼすため、システムID + アプリプロファイルID の2つを指定する。
-  # アプリプロファイル ID は aws_bedrock_inference_profile リソース属性から動的に参照（ハードコードしない）。
-  # in_price/out_price は 1M トークンあたりの USD 単価（jp. +10% 込み）。未確定なら null で「単価未設定」表示。
+  # - metric_ids は CloudWatch Metrics の ModelId ディメンションに実測で現れる値を並べる。
+  #   Lambda が実行時に app=claude-code のプロファイルを列挙して model_tag 経由で自動併合するため、
+  #   ここは過去分（jp. システム ID・旧 editor-claude-*-jp・削除済み cc-*）のフォールバック扱い。
+  # - model_tag は動的併合の対応キー（cc-* プロファイルの model タグ値: opus / sonnet / haiku）。
+  # - in_price/out_price は 1M トークンあたりの USD 単価（jp. +10% 込み）。未確定なら null で「単価未設定」表示。
+  #   実測（2026-09-03、CE の USAGE_TYPE 別単価を CW トークン数で逆算。8/26=Opusのみの日で分離）:
+  #     Opus 4.8   = $5.00/$25.00 ×1.1（従来 $6/$30 は誤りだったため訂正）
+  #     Sonnet 4.6 = $3.00/$15.00 ×1.1
+  #     Haiku 4.5  = $1.00/$5.00  ×1.1
+  #   キャッシュ課金（書込 1.25× / 読取 0.1× 入力単価）は Lambda 側で自動計算。
+  #   検証: 2026-08-24〜08-30 実績で概算 $291.17 = CE 実コスト $291.17（レポート時点）と一致。
   report_models = [
     {
-      name = "Opus 4.8"
-      metric_ids = [
+      name      = "Opus 4.8"
+      model_tag = "opus"
+      metric_ids = concat([
         "jp.anthropic.claude-opus-4-8",
         aws_bedrock_inference_profile.editor["opus-4-8"].id,
-      ]
-      in_price  = 6.6  # AWS 料金表（2026-07）$6.00 × jp.+10%
-      out_price = 33.0 # $30.00 × 1.1
+      ], local.cc_profile_ids.opus)
+      in_price  = 5.5  # AWS 料金表 $5.00 × jp.+10%（実測 2026-09-03）
+      out_price = 27.5 # $25.00 × 1.1
     },
     {
-      name = "Sonnet 4.6"
-      metric_ids = [
+      name      = "Sonnet 4.6"
+      model_tag = "sonnet"
+      metric_ids = concat([
         "jp.anthropic.claude-sonnet-4-6",
         aws_bedrock_inference_profile.editor["sonnet-4-6"].id,
-      ]
-      in_price  = null # AWS 料金表の Anthropic アコーディオンに公開行がなく未取得。コンソール料金タブで実数を確認して設定
-      out_price = null
+      ], local.cc_profile_ids.sonnet)
+      in_price  = 3.3  # $3.00 × 1.1（実測 2026-09-03）
+      out_price = 16.5 # $15.00 × 1.1
     },
     {
-      name = "Haiku 4.5"
-      metric_ids = [
+      name      = "Haiku 4.5"
+      model_tag = "haiku"
+      metric_ids = concat([
         "jp.anthropic.claude-haiku-4-5-20251001-v1:0",
         aws_bedrock_inference_profile.editor["haiku-4-5"].id,
-      ]
-      in_price  = null # 同上
-      out_price = null
+      ], local.cc_profile_ids.haiku)
+      in_price  = 1.1 # $1.00 × 1.1（実測 2026-09-03）
+      out_price = 5.5 # $5.00 × 1.1
     },
   ]
 }
@@ -61,6 +105,18 @@ data "aws_iam_policy_document" "report_usage" {
     actions   = ["cloudwatch:GetMetricStatistics", "cloudwatch:GetMetricData"]
     resources = ["*"]
   }
+
+  # metric_ids 動的併合用: app=claude-code のアプリ推論プロファイル列挙 + タグ読み取り
+  # （profile_ui と同じパターン。ListInferenceProfiles はリソーススコープを取らない読み取り専用 API）
+  statement {
+    sid = "ListProfilesForMetrics"
+    actions = [
+      "bedrock:ListInferenceProfiles",
+      "bedrock:ListTagsForResource",
+    ]
+    resources = ["*"]
+  }
+
   statement {
     sid       = "ReadCostExplorer"
     actions   = ["ce:GetCostAndUsage"]
@@ -91,14 +147,18 @@ resource "aws_lambda_function" "report_usage" {
   handler          = "report_usage.handler"
   filename         = data.archive_file.lambda_zip.output_path
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
-  timeout          = 60
+  # メトリクス取得が 4 種 × モデル別 metric_ids（動的併合で増える）+ プロファイル列挙なので余裕を持つ
+  timeout = 120
 
   environment {
     variables = {
-      WEBHOOK_PARAM      = local.webhook_param_name
-      METRIC_NAMESPACE   = "AWS/Bedrock"
-      COST_TAG_KEY       = "Project"
-      COST_TAG_VALUE     = "editor-claude-bedrock"
+      WEBHOOK_PARAM    = local.webhook_param_name
+      METRIC_NAMESPACE = "AWS/Bedrock"
+      # 実コストは利用者別内訳（app=claude-code）と同じフィルタに揃える。
+      # 旧・共有プロファイル（editor-claude-*-jp）は Project タグのみ・実利用はほぼ無いため、
+      # Project 基準だと利用者別合計と桁違いにずれる（実測 2026-08-10: Project=$13.84 / app=$124.56）。
+      COST_TAG_KEY   = "app"
+      COST_TAG_VALUE = "claude-code"
       # 利用者別内訳: app=claude-code を user タグでグループ化（setup-claude-code.md §0.5）
       USER_TAG_KEY       = "user"
       USER_APP_TAG_KEY   = "app"
