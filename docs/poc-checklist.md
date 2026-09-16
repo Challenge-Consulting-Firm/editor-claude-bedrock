@@ -138,6 +138,21 @@ Opus 5（global）追加を本番適用し、以下を実測で確認した。
 | CloudTrail 監査 | ✅ 6 名分とも「global許可」と分類、国内モデルは ap-northeast-1 のまま |
 | Terraform | ✅ `validate` 成功 / `plan` = No changes（per-user プロファイルは管理外のため差分なし） |
 
+### サブエージェントのモデル指定（2026-09-16 実測）
+
+コスト削減のためサブエージェント（Explore 等）を Haiku に固定できるかを実測した。結論: **可能**。
+手順は [setup-claude-code.md](setup-claude-code.md) §1.5。
+
+| 確認項目 | 結果 |
+|---|---|
+| `CLAUDE_CODE_SUBAGENT_MODEL` に per-user Haiku ARN | ✅ 動作。CloudTrail の modelId は `ps3qb3yiseyf`（Haiku）で 5 回、メインは `lukfc2db79dy`（Opus） |
+| エイリアス `haiku` 指定 | ⚠️ 動作するが modelId が `jp.anthropic.claude-haiku-4-5-...`（システムプロファイル直）になり、**user タグが付かず未配賦** |
+| `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` | 必須。無いと組み込み Explore / Plan がメイン会話のモデル（Opus）を継承する |
+
+**重要**: エイリアスでも IAM には拒否されない（(a-1) の jp.* 許可に当たるため）が、
+利用者別の棚卸しから静かに漏れる。必ず per-user ARN を指定させること。
+コスト差は入力 $5.5→$1.1 / 出力 $27.5→$5.5（約 1/5）。
+
 ## 付帯確認（判定には含めないが記録する）
 
 - [ ] キー発行の実測: `create-service-specific-credential` の `--credential-age-days` が期待どおり効くか（期限切れ後 401 になるか）
