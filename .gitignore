@@ -17,8 +17,11 @@ logs/
 # OS
 .DS_Store
 
-# ローカルのエージェント設定（個人の ARN ・許可設定を含むため共有しない）
-.claude/
+# 個人の Claude Code 設定（利用者固有 ARN・許可設定を含むため共有しない）
+# agents/・skills/ 等のチーム共有定義はコミット可能にしておく
+.claude/settings.json
+.claude/settings.local.json
+.claude/agent-memory-local/
 
 # Python の生成物（tests / lambda のローカル実行時）
 __pycache__/

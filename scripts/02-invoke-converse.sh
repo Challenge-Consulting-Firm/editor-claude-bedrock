@@ -16,7 +16,9 @@ OUT=$(aws bedrock-runtime converse --region "$AWS_REGION" \
   --inference-config '{"maxTokens":64}' \
   --output json)
 
-echo "$OUT" | jq -r '.output.message.content[0].text'
+# 応答の先頭ブロックが reasoningContent（thinking）になるモデル（Opus 5 等）があるため、
+# content[0] 決め打ちではなく text を持つ最初のブロックを取り出す（実測 2026-09-17）
+echo "$OUT" | jq -r '[.output.message.content[] | select(has("text")) | .text] | first // "(text ブロックなし)"'
 echo
 echo "$OUT" | jq '{stopReason, usage}'
 echo

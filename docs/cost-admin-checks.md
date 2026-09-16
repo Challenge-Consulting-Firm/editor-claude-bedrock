@@ -120,9 +120,11 @@ aws bedrock list-tags-for-resource --region ap-northeast-1 \
 
 > 💡 **コスト削減の確認ポイント**: 利用者がサブエージェントを Haiku に固定しているかは、
 > 下記「4. モデル別コスト」で Haiku の比率が上がっているかで見る。設定手順は
-> [setup-claude-code.md](setup-claude-code.md) §1.5。⚠️ エイリアス（`haiku`）で設定されていると
-> `jp.anthropic.claude-haiku-4-5-...` で記録され、利用者別集計の「(未配賦)」に入る（実測 2026-09-16）。
-> 未配賦が増えていたら、per-user ARN ではなくエイリアス指定になっていないかを疑う。
+> [setup-claude-code.md](setup-claude-code.md) §1.5。⚠️ `CLAUDE_CODE_SUBAGENT_MODEL=haiku` を使う場合、
+> `ANTHROPIC_DEFAULT_HAIKU_MODEL` もper-user ARNへ固定されていれば正しく配賦される。
+> 固定が無いと `jp.anthropic.claude-haiku-4-5-...`（システムプロファイル直）で記録され、
+> 利用者別集計の「(未配賦)」に入る（隔離環境で両ケースを実測 2026-09-16）。
+> 未配賦が増えていたら、Haikuのalias固定先がper-user ARNかを確認する。
 
 ---
 

@@ -186,10 +186,11 @@ export CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1
 > キー（`AWS_BEARER_TOKEN_BEDROCK`）は settings.json に書かずシェル環境変数で渡すこと
 > （設定ファイルの共有・コミット事故を防ぐ）。
 
-> ※ **`ANTHROPIC_SMALL_FAST_MODEL` は使わない**（旧設定・2026-09-16 削除）。
+> ※ **`ANTHROPIC_SMALL_FAST_MODEL` は新規設定で使わない**（設定例から 2026-09-16 削除）。
 > 現行のモデル固定は `ANTHROPIC_DEFAULT_OPUS_MODEL` / `..._SONNET_MODEL` / `..._HAIKU_MODEL` /
-> `..._FABLE_MODEL` の 4 つで行うのが公式の推奨（[Enterprise deployment overview](https://docs.claude.com/en/docs/claude-code/bedrock-vertex-proxies)
-> 「Pin model versions for cloud providers」）。補助タスクは `ANTHROPIC_DEFAULT_HAIKU_MODEL` が後継。
+> `..._FABLE_MODEL` の 4 つで行う。公式リファレンスも旧変数を
+> 「deprecated in favor of `ANTHROPIC_DEFAULT_HAIKU_MODEL`」と明記している
+> （[Model configuration — Environment variables](https://code.claude.com/docs/en/model-config#environment-variables)）。
 > 旧変数は CLI 2.1.273 でも後方互換で動作する（実測でエラー・警告なし）ため急いで外す必要はないが、
 > 新規設定では書かない。
 
@@ -203,12 +204,12 @@ Claude Code は調査や検索を**サブエージェント**（Explore / Plan /
 「ファイルを探す」だけの作業でも Opus 単価がかかる。ここを Haiku に固定すると
 **入力 $5.5 → $1.1、出力 $27.5 → $5.5（約 1/5）**になる。
 
-環境変数 2 つを足すだけでよい。**値には必ず利用者ポータルの自分専用 Haiku ARN を指定する**:
+環境変数 2 つを足すだけでよい。推奨は**利用者ポータルの自分専用 Haiku ARN を直接指定**する方法:
 
 ```bash
 # サブエージェントを Haiku に固定（メイン会話は ANTHROPIC_MODEL のまま）
 export CLAUDE_CODE_SUBAGENT_MODEL='arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>'
-# 定義側の model 指定より優先させ、組み込み Explore / Plan を含む全サブエージェントに強制適用する
+# サブエージェント定義や呼び出し側のmodel指定より優先し、全体を同じモデルへ固定する
 export CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1
 ```
 
@@ -223,22 +224,27 @@ export CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1
 }
 ```
 
-> ⚠️ **`haiku` などのエイリアス名ではなく ARN を指定すること**（本リポジトリ固有の注意点）。
-> 実測（2026-09-16・CloudTrail で裏取り）で次の差が出た:
+> ⚠️ **棚卸し漏れを防ぐには、最終的なmodelIdがper-user ARNになっていることを確認する。**
+> 実測（2026-09-16・隔離した `CLAUDE_CONFIG_DIR` + JSON出力 + CloudTrail）では次の3ケースになった:
 >
-> | 指定値 | CloudTrail に記録される modelId | ユーザー別棚卸し |
+> | 設定 | 実際の modelId / `modelUsage` | ユーザー別棚卸し |
 > |---|---|---|
-> | 自分専用 Haiku ARN | `...application-inference-profile/<自分のID>` | ✅ `user` タグで配賦される |
-> | `haiku`（エイリアス） | `jp.anthropic.claude-haiku-4-5-...` | ❌ **タグが付かず未配賦になる** |
+> | `CLAUDE_CODE_SUBAGENT_MODEL=<自分専用Haiku ARN>` | per-user ARN | ✅ 配賦される（最も明示的・推奨） |
+> | `...SUBAGENT_MODEL=haiku` + `ANTHROPIC_DEFAULT_HAIKU_MODEL=<自分専用ARN>` | per-user ARN | ✅ aliasが固定先ARNへ解決される |
+> | `...SUBAGENT_MODEL=haiku` + Haikuの固定なし | `jp.anthropic.claude-haiku-4-5-...` | ❌ システムプロファイル直で未配賦 |
 >
-> どちらも動作してコストも下がるが、エイリアスはシステム `jp.` プロファイルを直接呼ぶため
-> 週次レポートの利用者別集計から漏れ、「(未配賦)」に入る。
+> したがって `haiku` エイリアス自体が問題なのではなく、**`ANTHROPIC_DEFAULT_HAIKU_MODEL` の固定漏れ**が問題。
+> 本手順の完全な設定例（§1）は同変数もper-user ARNへ固定しているため、エイリアス方式でも配賦されるが、
+> 部分的な設定・他環境へのコピーで固定が抜ける事故を避けるため、サブエージェント変数にもARNを直接書く例を推奨する。
 
 **動作確認**: サブエージェント実行中に `/tasks` を開くと、各行に実際に使われているモデルが表示される。
 事後に確かめるなら `./scripts/04-check-cloudtrail.sh 15` で modelId 別の呼び出しを見る。
 
-※ `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` を付けないと `CLAUDE_CODE_SUBAGENT_MODEL` は「既定値」扱いになり、
-組み込み Explore / Plan はメイン会話のモデル（Opus）のままになる。全体を安くするなら 2 つセットで設定する。
+※ `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`（Claude Code **v2.1.257 以降**）を付けないと
+`CLAUDE_CODE_SUBAGENT_MODEL` は「既定値」扱いになり、
+サブエージェント定義の `model` や呼び出し時model指定が優先される。全体を確実に安くするなら2つセットで設定する。
+`FORCE=1` は組み込み Explore / Plan、カスタムサブエージェント、agent team、workflowにも同じモデルを強制する。
+例外は会話をforkするサブエージェントと、`model: inherit` のfork型skillで、メイン会話のモデルを使う（公式仕様）。
 
 ※ トレードオフ: サブエージェントの推論能力は下がる。単純な検索・列挙なら Haiku で十分だが、
 複雑な調査や設計検討を委譲するなら Sonnet ARN にするか、一時的に外す。
@@ -260,6 +266,8 @@ model: arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile
 
 ただし ARN は利用者ごとに異なるため、プロジェクトにコミットして共有するファイルでは `model: inherit` にし、
 実際のモデルは上記の環境変数（各自の設定）で制御する方が安全。
+また `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` が有効な間は、このfrontmatterの `model` 値も無視される。
+用途ごとに個別モデルを使い分けたい場合は `FORCE` を外し、各定義の `model` で指定する。
 
 ## 2. 動作確認
 
