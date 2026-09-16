@@ -118,6 +118,12 @@ aws bedrock list-tags-for-resource --region ap-northeast-1 \
 各 per-user プロファイルに `user=<氏名>` / `app=claude-code` / `model=opus|sonnet|haiku|opus-5` が揃っていること。
 新規作成分は `residency=jp|global` も確認する。特に Opus 5 は `model=opus-5` / `residency=global` がIAM許可の必須条件。
 
+> 💡 **コスト削減の確認ポイント**: 利用者がサブエージェントを Haiku に固定しているかは、
+> 下記「4. モデル別コスト」で Haiku の比率が上がっているかで見る。設定手順は
+> [setup-claude-code.md](setup-claude-code.md) §1.5。⚠️ エイリアス（`haiku`）で設定されていると
+> `jp.anthropic.claude-haiku-4-5-...` で記録され、利用者別集計の「(未配賦)」に入る（実測 2026-09-16）。
+> 未配賦が増えていたら、per-user ARN ではなくエイリアス指定になっていないかを疑う。
+
 ---
 
 ## 6. 推論リージョンの事後監査（residency）

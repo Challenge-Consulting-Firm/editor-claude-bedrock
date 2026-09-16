@@ -164,6 +164,9 @@ export ANTHROPIC_MODEL='arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-
 # 補助タスクも利用者ポータルの自分専用 haiku ARN を指定して配賦する
 export ANTHROPIC_SMALL_FAST_MODEL='arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>'
 export ANTHROPIC_DEFAULT_HAIKU_MODEL='arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>'
+# コスト削減（推奨）: 調査・検索を行うサブエージェントも Haiku に固定する（§1.5）
+export CLAUDE_CODE_SUBAGENT_MODEL='arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>'
+export CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1
 ```
 
 **settings.json の場合**（`~/.claude/settings.json` — プロジェクト側 `.claude/settings.json` でも可）:
@@ -175,7 +178,9 @@ export ANTHROPIC_DEFAULT_HAIKU_MODEL='arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID
     "AWS_REGION": "ap-northeast-1",
     "ANTHROPIC_MODEL": "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のPROFILE_ID>",
     "ANTHROPIC_SMALL_FAST_MODEL": "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>"
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>",
+    "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "1"
   }
 }
 ```
@@ -185,6 +190,71 @@ export ANTHROPIC_DEFAULT_HAIKU_MODEL='arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID
 
 節約したい日常タスクは `--model <自分の cc-<user>-sonnet ARN>` への切替も可
 （システム `jp.` の直指定は共有キー利用時のユーザー別棚卸しを迂回するため使わない。単価はOpus $5.5/$27.5、Sonnet $3.3/$16.5、Haiku $1.1/$5.5 per 1M・jp +10%込み。Opus 5は単価確認中）。
+
+## 1.5. サブエージェントのモデルを安いものに固定する（コスト削減・推奨）
+
+Claude Code は調査や検索を**サブエージェント**（Explore / Plan / general-purpose 等）に委譲する。
+既定ではサブエージェントも**メイン会話と同じモデル（= Opus）を継承**するため、
+「ファイルを探す」だけの作業でも Opus 単価がかかる。ここを Haiku に固定すると
+**入力 $5.5 → $1.1、出力 $27.5 → $5.5（約 1/5）**になる。
+
+環境変数 2 つを足すだけでよい。**値には必ず利用者ポータルの自分専用 Haiku ARN を指定する**:
+
+```bash
+# サブエージェントを Haiku に固定（メイン会話は ANTHROPIC_MODEL のまま）
+export CLAUDE_CODE_SUBAGENT_MODEL='arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>'
+# 定義側の model 指定より優先させ、組み込み Explore / Plan を含む全サブエージェントに強制適用する
+export CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1
+```
+
+`settings.json` なら `env` ブロックに同じ 2 つを追加する:
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_SUBAGENT_MODEL": "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>",
+    "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "1"
+  }
+}
+```
+
+> ⚠️ **`haiku` などのエイリアス名ではなく ARN を指定すること**（本リポジトリ固有の注意点）。
+> 実測（2026-09-16・CloudTrail で裏取り）で次の差が出た:
+>
+> | 指定値 | CloudTrail に記録される modelId | ユーザー別棚卸し |
+> |---|---|---|
+> | 自分専用 Haiku ARN | `...application-inference-profile/<自分のID>` | ✅ `user` タグで配賦される |
+> | `haiku`（エイリアス） | `jp.anthropic.claude-haiku-4-5-...` | ❌ **タグが付かず未配賦になる** |
+>
+> どちらも動作してコストも下がるが、エイリアスはシステム `jp.` プロファイルを直接呼ぶため
+> 週次レポートの利用者別集計から漏れ、「(未配賦)」に入る。
+
+**動作確認**: サブエージェント実行中に `/tasks` を開くと、各行に実際に使われているモデルが表示される。
+事後に確かめるなら `./scripts/04-check-cloudtrail.sh 15` で modelId 別の呼び出しを見る。
+
+※ `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` を付けないと `CLAUDE_CODE_SUBAGENT_MODEL` は「既定値」扱いになり、
+組み込み Explore / Plan はメイン会話のモデル（Opus）のままになる。全体を安くするなら 2 つセットで設定する。
+
+※ トレードオフ: サブエージェントの推論能力は下がる。単純な検索・列挙なら Haiku で十分だが、
+複雑な調査や設計検討を委譲するなら Sonnet ARN にするか、一時的に外す。
+
+### 特定の用途だけモデルを分ける（任意）
+
+カスタムサブエージェントを作るなら `.claude/agents/<name>.md` の frontmatter で個別指定できる:
+
+```markdown
+---
+name: code-explorer
+description: コード検索・調査専用。読み取りのみ。
+tools: Read, Grep, Glob
+model: arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>
+---
+
+コードベースを検索し、要点だけを簡潔に報告する。
+```
+
+ただし ARN は利用者ごとに異なるため、プロジェクトにコミットして共有するファイルでは `model: inherit` にし、
+実際のモデルは上記の環境変数（各自の設定）で制御する方が安全。
 
 ## 2. 動作確認
 
