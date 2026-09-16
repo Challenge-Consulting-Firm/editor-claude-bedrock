@@ -1,8 +1,7 @@
 # Zed セットアップ（検証 3 実測済み・2026-07-14）
 
-Zed の**ネイティブ Amazon Bedrock プロバイダ**（1.10.3 で実測）から、jp. プロファイル（国内完結）を
-Bedrock API キーで使う手順。**チャット実測済み**（Opus 4.8 カスタム / Sonnet 4.6 組み込みとも成功、
-CloudTrail で国内ルーティングを確認）。
+Zed の**ネイティブ Amazon Bedrock プロバイダ**から、国内3モデルの `jp.` プロファイルと
+ユーザー別 Opus 5（global）を Bedrock API キーで使う手順。国内モデルは実測済み。
 
 > 旧版の本ドキュメントは「OpenAI 互換で直結」を想定していたが、それは不成立（README「実測で分かった制約」#3）。
 > 現在の Zed はネイティブ Bedrock プロバイダ + Bedrock API キー認証に対応しており、直結できる。
@@ -12,6 +11,7 @@ CloudTrail で国内ルーティングを確認）。
 | 使い方 | モデル選択 | 可否 |
 |---|---|---|
 | チャット × Opus 4.8 × 国内完結 | カスタム「社内: Claude Opus 4.8 (国内完結)」 | ✅ 実測 OK |
+| チャット × Opus 5 × global | ポータルの自分専用 `opus-5` ARNをカスタム登録 | ✅ Bedrock/IAM経路を実測（国外処理・Zedカスタムはツールなし） |
 | エージェント（ツール込み）× 国内完結 | **組み込みの「Claude Sonnet 4.6」**（jp. 自動付与） | ✅ 実測 OK |
 | エージェント × Opus 4.8 | — | ❌ 不可（**Zed 固有の制約**。下記参照） |
 
@@ -69,8 +69,8 @@ Opus 4.8 チャット**。
       "region": "ap-northeast-1",   // 1.10.3 では効かないことがある → 下の環境変数が確実
       "available_models": [
         {
-          // コスト配賦タグつきのアプリケーション推論プロファイル ARN を推奨
-          // （Custom は name を無加工で送るため ARN も可。jp.anthropic.claude-opus-4-8 直指定でも動く）
+          // 利用者ポータルに表示された自分専用 ARN を指定する。
+          // 国内なら opus、Opus 5なら opus-5（国外処理）のARNを別エントリで登録可能。
           "name": "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<PROFILE_ID>",
           "display_name": "社内: Claude Opus 4.8 (国内完結)",
           "max_tokens": 200000,
@@ -143,13 +143,14 @@ Settings → AI → LLM Providers → **Amazon Bedrock** → Bedrock API Key 欄
 
 1. モデルピッカー →「社内: Claude Opus 4.8 (国内完結)」→ チャットで質問
 2. 組み込み「Claude Sonnet 4.6」→ エージェントタスク（ツールが有効なことを確認）
-3. `jp.` 以外（組み込み Opus 等）を選ぶと AccessDenied になるのは**正常**（迂回防止が効いている）
+3. 組み込みのglobal Opusやシステム `global.` IDを選ぶとAccessDeniedになるのは**正常**。
+   Opus 5はポータルの自分専用ARNからのみ利用できる
 
 ## 4. 監査・コスト
 
-- Zed の利用も CloudTrail に記録される（eventName は `ConverseStream`。`scripts/04-check-cloudtrail.sh` で
-  `inferenceRegion` が ap-northeast-1/3 であることを確認できる）
-- コスト配賦: カスタムモデル（上記 ARN 指定）の利用は `Project` タグで Cost Explorer 集計可能。
+- Zed の利用も CloudTrail に記録される。`scripts/04-check-cloudtrail.sh` で国内処理と
+  `residency=global` の許可済みOpus 5を分類できる
+- コスト配賦: カスタムモデルは必ず利用者ポータルの自分専用ARNを使うため、`user`タグでCost Explorer集計可能。
   **組み込み Sonnet 4.6（エージェント用）はシステムプロファイル直のためタグ配賦されない**（design.md §6）。
 
 ## 5. Windows での差分（未実測）

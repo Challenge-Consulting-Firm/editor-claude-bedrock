@@ -17,6 +17,13 @@ logs/
 # OS
 .DS_Store
 
+# ローカルのエージェント設定（個人の ARN ・許可設定を含むため共有しない）
+.claude/
+
+# Python の生成物（tests / lambda のローカル実行時）
+__pycache__/
+*.pyc
+
 # ローカル検証用(アカウント固有値を含む)・ビルド成果物
 poc-vscode-test/
 infra/*.zip

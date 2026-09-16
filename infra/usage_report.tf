@@ -84,6 +84,22 @@ locals {
       out_price = 5.5 # $5.00 × 1.1
     },
   ]
+
+  # Opus 5（global.）のレポート定義。allow_global_models = false なら空リスト。
+  # globalモデルは共有プロファイルを作らず、システムプロファイル直指定も IAM で拒否する。
+  # per-user profile ID は Lambda が model タグから動的発見するため、静的 ID は不要。
+  # 単価は未検証のため null = 「単価未設定」表示にし、トークン数だけを集計する。
+  report_models_global = var.allow_global_models ? [
+    for id in var.global_model_profile_ids : {
+      name       = "${title(replace(trimprefix(id, "global.anthropic.claude-"), "-", " "))} (global)"
+      model_tag  = trimprefix(id, "global.anthropic.claude-")
+      metric_ids = []
+      in_price   = null
+      out_price  = null
+    }
+  ] : []
+
+  report_models_all = concat(local.report_models, local.report_models_global)
 }
 
 resource "aws_iam_role" "report_usage" {
@@ -165,7 +181,7 @@ resource "aws_lambda_function" "report_usage" {
       USER_APP_TAG_VALUE = "claude-code"
       REPORT_DAYS        = "7"
       MONTHLY_BUDGET_USD = tostring(var.monthly_budget_usd)
-      MODELS_JSON        = jsonencode(local.report_models)
+      MODELS_JSON        = jsonencode(local.report_models_all)
     }
   }
 }

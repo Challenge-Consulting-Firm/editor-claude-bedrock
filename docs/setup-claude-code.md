@@ -1,11 +1,12 @@
 # Claude Code セットアップ（検証 3 実測済み・2026-07-14）
 
-Claude Code CLI から Bedrock の **jp. プロファイル（国内完結）× Claude Opus 4.8** を Bearer API キーで使う手順。
-**エンドツーエンド実測済み**（チャット応答・ツール使用によるファイル生成の両方を確認）。
+Claude Code CLI から Bedrock の **国内3モデル（`jp.`）と Opus 5（`global.`）**を Bearer API キーで使う手順。
+国内3モデルのエンドツーエンド動作は実測済み。Opus 5 はユーザー別アプリ推論プロファイル経由でのみ許可する。
 
 ## 0. 前提（運用者側で完了済みであること）
 
-- アカウントの **Anthropic use case フォーム提出**と **Opus 4.8 の契約作成**（初回のみ。[poc-checklist.md](poc-checklist.md) 参照）
+- アカウントの **Anthropic use case フォーム提出**と **Opus 4.8 / Opus 5 の契約・認可**
+  （`scripts/00-preflight.sh` で Opus 5 が `AUTHORIZED` / `AVAILABLE` か確認）
 - 利用者用 IAM ユーザー + jp. 限定ポリシー（[infra/main.tf](../infra/main.tf)）
 - Bedrock API キーの発行（`scripts/10-issue-api-key.sh`。有効期限つき）
 - **利用者ごとのアプリケーション推論プロファイル**（コスト配賦用。次節参照）
@@ -15,10 +16,12 @@ Claude Code CLI から Bedrock の **jp. プロファイル（国内完結）× 
 Bedrock のオンデマンド推論はリソース非依存の課金のため、**誰がいくら使ったか**を割り出すには
 利用者ごとにタグ付きアプリケーション推論プロファイルを作り、各自にその ARN を使わせる。
 API キーは共有のままでよい（課金は「呼び出したプロファイル」に付いた `user` タグで集計される）。
-プロファイル自体は無償で、jp. の +10% プレミアムや推論先（東京+大阪）は元プロファイルを継承する。
+プロファイル自体は無償。国内3モデルは jp. の推論先（東京+大阪）と +10% プレミアムを継承し、
+Opus 5 は global ルーティングを継承する。いずれもユーザー別の `user` タグで棚卸しする。
 
-利用者 1 名につき **Opus 4.8（主力）＋ Sonnet 4.6（節約）＋ Haiku 4.5（軽量）の 3 本**を作る。命名は `cc-<user>-opus` /
-`cc-<user>-sonnet` / `cc-<user>-haiku`（プロファイル名にドットは使えないので `.` は `-` に置換）。
+利用者 1 名につき **Opus 4.8（国内）＋ Sonnet 4.6（国内）＋ Haiku 4.5（国内）＋ Opus 5（global）の4本**を
+ポータルから作成する。既存利用者は再度「作成」を押すと、不足している Opus 5 だけが追加される。
+以下のCLI例は国内3モデルを手動作成する旧手順であり、Opus 5 はポータル利用を推奨する。
 
 ```bash
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
@@ -33,17 +36,17 @@ for U in takeshi.ohno riku.ibaraki takashi.kuwabara daisuke.kawashima yusuke.kob
   aws bedrock create-inference-profile --region "$REGION" \
     --inference-profile-name "cc-${N}-opus" \
     --model-source copyFrom="$OPUS_SRC" \
-    --tags key=user,value=$U key=app,value=claude-code key=model,value=opus \
+    --tags key=user,value=$U key=app,value=claude-code key=model,value=opus key=residency,value=jp \
     --query 'inferenceProfileArn' --output text | sed "s|^|${U} opus: |"
   aws bedrock create-inference-profile --region "$REGION" \
     --inference-profile-name "cc-${N}-sonnet" \
     --model-source copyFrom="$SONNET_SRC" \
-    --tags key=user,value=$U key=app,value=claude-code key=model,value=sonnet \
+    --tags key=user,value=$U key=app,value=claude-code key=model,value=sonnet key=residency,value=jp \
     --query 'inferenceProfileArn' --output text | sed "s|^|${U} sonnet: |"
   aws bedrock create-inference-profile --region "$REGION" \
     --inference-profile-name "cc-${N}-haiku" \
     --model-source copyFrom="$HAIKU_SRC" \
-    --tags key=user,value=$U key=app,value=claude-code key=model,value=haiku \
+    --tags key=user,value=$U key=app,value=claude-code key=model,value=haiku key=residency,value=jp \
     --query 'inferenceProfileArn' --output text | sed "s|^|${U} haiku: |"
 done
 ```
@@ -67,19 +70,19 @@ foreach ($U in $users) {
   $opus = aws bedrock create-inference-profile --region $REGION `
     --inference-profile-name "cc-$N-opus" `
     --model-source copyFrom="$OPUS_SRC" `
-    --tags key=user,value=$U key=app,value=claude-code key=model,value=opus `
+    --tags key=user,value=$U key=app,value=claude-code key=model,value=opus key=residency,value=jp `
     --query 'inferenceProfileArn' --output text
   Write-Output "$U opus: $opus"
   $sonnet = aws bedrock create-inference-profile --region $REGION `
     --inference-profile-name "cc-$N-sonnet" `
     --model-source copyFrom="$SONNET_SRC" `
-    --tags key=user,value=$U key=app,value=claude-code key=model,value=sonnet `
+    --tags key=user,value=$U key=app,value=claude-code key=model,value=sonnet key=residency,value=jp `
     --query 'inferenceProfileArn' --output text
   Write-Output "$U sonnet: $sonnet"
   $haiku = aws bedrock create-inference-profile --region $REGION `
     --inference-profile-name "cc-$N-haiku" `
     --model-source copyFrom="$HAIKU_SRC" `
-    --tags key=user,value=$U key=app,value=claude-code key=model,value=haiku `
+    --tags key=user,value=$U key=app,value=claude-code key=model,value=haiku key=residency,value=jp `
     --query 'inferenceProfileArn' --output text
   Write-Output "$U haiku: $haiku"
 }
@@ -89,20 +92,56 @@ foreach ($U in $users) {
 > スペース区切りで並べる（bash と同一）。
 </details>
 
-- **タグ**: `user`（集計軸・IAM ユーザー名に合わせる）/ `app=claude-code`（他用途と分離。**キー通知の
-  Lambda はこのタグでプロファイルを列挙する**）/ `model`（opus・sonnet・haiku の内訳）
+- **タグ**: `user`（集計軸）/ `app=claude-code`（他用途と分離）/ `model`（`opus` / `sonnet` / `haiku` / `opus-5`）/
+  `residency`（新規作成分は `jp` / `global`）。Opus 5 は4タグすべてが揃ったper-userプロファイルだけIAMで呼び出し可能
 - **`--description` は付けない**: ASCII の一部記号（括弧など）で ValidationException になる。不要なら省略が安全
 - 作成済み一覧: `aws bedrock list-inference-profiles --region ap-northeast-1 --type-equals APPLICATION`
-- **コスト配分タグの有効化**: `user` タグを Billing コンソール（または
-  `aws ce update-cost-allocation-tags-status --cost-allocation-tags-status TagKey=user,Status=Active`）で
-  有効化する。**新しいタグキーはそのタグ付きの課金が一度発生してからでないと認識されない**（遡及もしない）。
-  `user` が既に Active なら即集計可能
+- **コスト配分タグの有効化**: `user` / `app` / `model` / `residency` を Billing コンソールまたはCLIで有効化する。
+  `user` は利用者合計、`model` は各利用者がOpus 5を使った額、`residency` は国内/globalの区別に使う。
+  **新しいタグキーはそのタグ付き課金が一度発生してからでないと認識されず、有効化前へ遡及もしない**
 - **集計**: `aws ce get-cost-and-usage --time-period Start=YYYY-MM-01,End=YYYY-MM-DD --granularity MONTHLY --metrics UnblendedCost --filter '{"Tags":{"Key":"app","Values":["claude-code"]}}' --group-by Type=TAG,Key=user`
-- **限界（性善説）**: 各自が自分の ARN を設定する前提。強制はできない（厳密に分けたいなら利用者ごとに API キー＝IAM プリンシパルを分ける）。各自の ARN は**利用者ポータル**（[profile_ui.py](../lambda/profile_ui.py)）で本人が認証後にコピーする（週次 Teams 通知はポータル URL の案内のみ）
+- **限界（共有キー）**: IAMはper-userタグ付きプロファイルの使用までは強制するが、共有キーでは「本人が自分のARNを使う」ことまでは
+  技術的に強制できない。ポータル表示と運用で本人ARNを徹底し、厳密な本人紐付けが必要なら利用者ごとにAPIキー/IAMプリンシパルを分ける
 
-> Opus 5 について: Marketplace 契約済みでも、現時点で **jp.（国内完結）プロファイルは未提供**
-> （`jp.anthropic.claude-opus-5` は存在しない。あるのは `global.` のみ）。国内完結を維持するため
-> Opus 4.8 を使う。jp. が提供されたら `OPUS_SRC` を差し替えて同手順で追加できる。
+### 全利用者の一括同期（新モデル追加時・推奨）
+
+モデルを追加したときは、各自にポータル操作を依頼する代わりに運用者が一括作成できる:
+
+```bash
+./scripts/11-sync-user-profiles.sh --dry-run   # 差分確認
+./scripts/11-sync-user-profiles.sh             # 全利用者を同期
+./scripts/11-sync-user-profiles.sh --user 新メンバー名  # 1 名だけ
+```
+
+- モデル定義は**デプロイ済み profile_ui Lambda の `MODEL_SOURCES_JSON` を参照**するので、
+  Terraform の `allow_global_models` / `global_model_profile_ids` と常に一致する（定義の二重管理なし）
+- **冪等**: 既存プロファイルはスキップし、不足分だけ作る。`residency` タグが無い旧プロファイルには補完する
+- 対象利用者は既存の `app=claude-code` プロファイルから自動検出する（上記 6 名と一致）
+- 実績: 2026-09-16 に本スクリプトで **Opus 5 を全 6 名に展開**（5 件新規作成・1 名は既存のため変更なし）
+
+> ### Claude 5 系の制約と Opus 5 の運用 — ⚠️ 国内完結ではない
+>
+> 5 系は **`jp.`（国内完結）プロファイルが未提供**で、東京リージョンに固定して使う手段も存在しない。
+> 実測（2026-09-16）で確認した制約:
+>
+> - `jp.anthropic.claude-opus-5` は**存在しない**（`The provided model identifier is invalid`）
+> - 素のモデル ID `anthropic.claude-opus-5` は **on-demand 非対応**
+>   （`Invocation of model ID ... with on-demand throughput isn't supported`）= プロファイル経由が強制
+> - 東京の foundation-model ARN からアプリ推論プロファイルを作ろうとしても
+>   `The provided foundation model does not support On Demand inference` で**東京ピン留め不可**
+> - `global.` プロファイルの実体は**リージョン無し ARN を含む全世界ルーティング**。
+>   東京エンドポイントから呼んでも CloudTrail の `inferenceRegion` は
+>   **Opus 5 → `eu-west-1`（アイルランド）/ Sonnet 5 → `us-east-1`（バージニア）**
+>
+> **判断（2026-09-16）**: 開発効率を優先し、Opus 5 は**グローバル利用を前提に許可**する。
+> ただし国内完結が要る作業（社内コード・顧客データを含むもの）では **Opus 4.8 / Sonnet 4.6 / Haiku 4.5** を使うこと。
+> ポータル上では Opus 5 に <code>国外処理</code> バッジが出るので、それを目印に選び分ける。
+>
+> 統制面では `allow_global_models = false`（Terraform 変数）で Opus 5 を IAM ごと塞げる。
+> 許可対象の基盤モデルはallowlistで明示列挙し、システム `global.` の直指定は許可しない。
+> （同じ接頭辞の `global.openai.*` / `global.xai.*` 等を巻き込まないため）。
+> Opus 5 は利用者ポータルに表示された `user` タグ付きARNからのみ利用できる。
+> jp. 版 Opus 5 が提供されたらコピー元を差し替えて国内完結に戻せる。
 
 ## 1. 利用者の設定
 
@@ -119,14 +158,12 @@ EntraID サインイン後にコピー）。キーは毎週月曜 09:00 JST に�
 export CLAUDE_CODE_USE_BEDROCK=1
 export AWS_REGION=ap-northeast-1
 export AWS_BEARER_TOKEN_BEDROCK='<配布されたキー>'
-# 主力: Opus 4.8（国内完結・コスト配賦タグつき）— アプリケーション推論プロファイル ARN を推奨
-# （ARN は `terraform output application_inference_profile_arns` で確認。実測済み 2026-07-14）
-export ANTHROPIC_MODEL='arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<PROFILE_ID>'
-# タグ配賦が不要なら jp. システムプロファイル直指定でも可:
-# export ANTHROPIC_MODEL='jp.anthropic.claude-opus-4-8'
-# 補助タスク用の軽量モデル（どちらの変数名も設定しておく）
-export ANTHROPIC_SMALL_FAST_MODEL='jp.anthropic.claude-haiku-4-5-20251001-v1:0'
-export ANTHROPIC_DEFAULT_HAIKU_MODEL='jp.anthropic.claude-haiku-4-5-20251001-v1:0'
+# 主力モデル: 必ず利用者ポータルに表示された自分専用 ARN を指定する
+# 国内完結なら opus、最新モデル（国外処理許容）なら opus-5 の ARN
+export ANTHROPIC_MODEL='arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のPROFILE_ID>'
+# 補助タスクも利用者ポータルの自分専用 haiku ARN を指定して配賦する
+export ANTHROPIC_SMALL_FAST_MODEL='arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>'
+export ANTHROPIC_DEFAULT_HAIKU_MODEL='arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>'
 ```
 
 **settings.json の場合**（`~/.claude/settings.json` — プロジェクト側 `.claude/settings.json` でも可）:
@@ -136,9 +173,9 @@ export ANTHROPIC_DEFAULT_HAIKU_MODEL='jp.anthropic.claude-haiku-4-5-20251001-v1:
   "env": {
     "CLAUDE_CODE_USE_BEDROCK": "1",
     "AWS_REGION": "ap-northeast-1",
-    "ANTHROPIC_MODEL": "jp.anthropic.claude-opus-4-8",
-    "ANTHROPIC_SMALL_FAST_MODEL": "jp.anthropic.claude-haiku-4-5-20251001-v1:0",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "jp.anthropic.claude-haiku-4-5-20251001-v1:0"
+    "ANTHROPIC_MODEL": "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のPROFILE_ID>",
+    "ANTHROPIC_SMALL_FAST_MODEL": "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>"
   }
 }
 ```
@@ -147,7 +184,7 @@ export ANTHROPIC_DEFAULT_HAIKU_MODEL='jp.anthropic.claude-haiku-4-5-20251001-v1:
 > （設定ファイルの共有・コミット事故を防ぐ）。
 
 節約したい日常タスクは `--model <自分の cc-<user>-sonnet ARN>` への切替も可
-（jp. 直指定 `jp.anthropic.claude-sonnet-4-6` も IAM 許可済みだが、コスト配賦するなら利用者ポータルの Sonnet ARN を使う。単価は Opus $6.6/$33.0（AWS 料金表 2026-07 実測）、Sonnet/Haiku は料金表に公開行がなく未確定 per 1M・jp +10% 込み）。
+（システム `jp.` の直指定は共有キー利用時のユーザー別棚卸しを迂回するため使わない。単価はOpus $5.5/$27.5、Sonnet $3.3/$16.5、Haiku $1.1/$5.5 per 1M・jp +10%込み。Opus 5は単価確認中）。
 
 ## 2. 動作確認
 
@@ -162,15 +199,14 @@ claude -p "「国内完結OK」とだけ返答してください"
 | `The model ... is not available on your bedrock deployment` | **表示が誤解を招く**。実体は下 2 行のどちらかが大半 | `ANTHROPIC_LOG=debug claude -p "ping"` で実際の HTTP エラーを確認 |
 | （debug で）404 `Model use case details have not been submitted` | アカウントの Anthropic use case フォーム未提出 | 運用者に連絡（管理者作業） |
 | （debug で）403 `aws-marketplace:ViewSubscriptions...` | Opus 系の契約未作成 or 作成直後の伝播待ち | 運用者に連絡。作成済みなら **2 分待って再実行** |
-| 401 / `access_denied` | キー失効（有効期限切れ）or jp. 以外のモデルを指定 | 新キーを受領 / `jp.` プレフィックスのモデルに戻す |
+| 401 / `access_denied` | キー失効、未許可モデル、またはユーザータグ付きプロファイルを経由していない | 新キーを受領 / 利用者ポータルに表示された自分専用 ARN を設定 |
 | `Converse` の疎通確認は通るのに Claude Code が動かない | Claude Code は **InvokeModelWithResponseStream** を使う。**Converse は use case フォーム未提出でも通ってしまう**（AWS の執行不整合）ため疎通確認としては不十分 | 動作確認は本ページ §2 の `claude -p` で行う |
 
 ## 4. 運用メモ
 
-- 監査: 利用は CloudTrail に `InvokeModelWithResponseStream`（modelId=jp.…）として記録され、
-  成功呼び出しには `inferenceRegion`（ap-northeast-1/3）が付く。`scripts/04-check-cloudtrail.sh` で確認
-- 迂回防止: `jp.` 以外のモデル指定は IAM で拒否される（エラーになるのが正常）
-- Claude 5 系（fable-5 / sonnet-5）は jp. 未対応のため設定不可。対応され次第 `ANTHROPIC_MODEL` を差し替え
+- 監査: 成功呼び出しは CloudTrail の `inferenceRegion` で確認する。国内モデルは ap-northeast-1/3、
+  Opus 5 は `residency=global` タグ付きper-userプロファイルに限り国外処理を許容。`scripts/04-check-cloudtrail.sh` が両者を分類する
+- 迂回防止: Opus 5 の `global.` システムプロファイル直指定は拒否される。必ず利用者ポータルの `opus-5` ARN を使う
 
 ## 5. Windows での差分（未実測）
 
@@ -184,7 +220,7 @@ claude -p "「国内完結OK」とだけ返答してください"
   $env:CLAUDE_CODE_USE_BEDROCK = "1"
   $env:AWS_REGION = "ap-northeast-1"
   $env:AWS_BEARER_TOKEN_BEDROCK = "<配布されたキー>"
-  $env:ANTHROPIC_MODEL = "jp.anthropic.claude-opus-4-8"   # または application-inference-profile ARN
+  $env:ANTHROPIC_MODEL = "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のPROFILE_ID>"
   ```
 
 - **恒久化**: `setx CLAUDE_CODE_USE_BEDROCK 1`（新しいプロセスから有効。既存ターミナルは再起動が必要）。

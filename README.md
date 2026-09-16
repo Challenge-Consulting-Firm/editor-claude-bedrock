@@ -2,7 +2,8 @@
 
 姉妹リポジトリ editor-openai-foundry（社内・非公開）（Azure 版・稼働中）で
 **実測の結果諦めた「推論の国内完結」**を、AWS Bedrock の **日本国内クロスリージョン推論プロファイル（`jp.` プロファイル）** で
-取り戻せるかを実測する PoC。モデルは **Claude Opus 4.8** を前提とする。
+取り戻せるかを実測した PoC。国内モデルに加え、開発効率を優先する選択肢として **Claude Opus 5（global）**を
+ユーザー別棚卸し付きで限定許可するハイブリッド構成へ拡張している。
 
 > Azure 版の教訓（公式提供表と実環境の乖離を 4 回踏んだ）に従い、本 PoC も
 > **「書類上できるはず」を一切信用せず、全て実測で白黒つける**方針。判定は [docs/poc-checklist.md](docs/poc-checklist.md) に記録する。
@@ -22,11 +23,11 @@
 
 | 軸 | Azure（稼働中） | Bedrock（本 PoC） |
 |---|---|---|
-| 国内完結 | ❌ 実測で不可（DataZone/APAC 止まり） | ✅ 見込み: `jp.` プロファイルで東京+大阪に限定（**+10% プレミアム**） |
-| 迂回防止 | deployment 名の運用規約のみ | **IAM ポリシーで `jp.` 以外を拒否**（本リポジトリの Terraform で実装）+ **コスト配賦を `user` タグ付きプロファイルに一本化**（共有プロファイルの invoke を遮断） |
+| 国内完結 | ❌ 実測で不可（DataZone/APAC 止まり） | 国内3モデルは ✅ 東京+大阪限定。Opus 5選択時のみ ⚠️ global処理 |
+| 迂回防止 | deployment 名の運用規約のみ | 国内は `jp.`、Opus 5は user/residencyタグ付きper-userプロファイルだけをIAM許可 | |
 | 監査 | KQL（利用量） | **CloudTrail の `inferenceRegion` で実処理リージョンを事後監査** |
 | エディタからキー利用 | ✅ 実証済み（api-key） | △ **要実測**: OpenAI 互換エンドポイント + Bedrock API キー（Bearer） |
-| モデル | gpt-5.2（APAC） | Claude Opus 4.8（国内完結・見込み） |
+| モデル | gpt-5.2（APAC） | Claude Opus 4.8 / Sonnet 4.6 / Haiku 4.5（国内）、Opus 5（global） |
 
 ## 実測で分かった制約（ap-northeast-1/3・2026-07-14）
 
@@ -51,8 +52,16 @@
 6. jp. の大阪ルーティングに備え、明示 Deny の許容リージョンは**東京+大阪の 2 つ**が必要
    （東京のみにすると jp. プロファイル内部の大阪ルーティングが拒否される — 実際に踏んだ）
 7. Bearer キー利用には `bedrock:CallWithBearerToken` の Allow が別途必要
-8. Claude 5 系（`claude-fable-5` / `claude-sonnet-5`）は東京に提供済みだが **jp. プロファイル未対応**
-   （Azure の「最新モデルほど地域限定が遅い」と同じ構図。国内完結の最上位は当面 Opus 4.8）
+8. Claude 5 系（`claude-opus-5` / `claude-sonnet-5` / `claude-fable-5`）は東京に提供済みだが **jp. プロファイル未対応**。
+   **東京リージョンに固定して 5 系を使う手段は存在しない**（実測 2026-09-16で 3 経路とも封じられていることを確認）:
+   - `jp.anthropic.claude-opus-5` は存在しない（`The provided model identifier is invalid`）
+   - 素のモデル ID は on-demand 非対応（`inferenceTypesSupported: [INFERENCE_PROFILE]`）= プロファイル経由強制
+   - 東京の foundation-model ARN からのアプリ推論プロファイル作成も `does not support On Demand inference`
+   - → **`global.` のみ。実測した実処理先は Opus 5 = `eu-west-1` / Sonnet 5 = `us-east-1`**
+     （`global.` プロファイルの models[] にリージョン無し ARN が含まれるのが全世界ルーティングの実体）。
+   **運用判断（2026-09-16）**: 開発効率を優先し Opus 5 はグローバル前提で許可（`allow_global_models`）。
+   国内完結が要る作業は 4.x（Opus 4.8 / Sonnet 4.6 / Haiku 4.5）を使う。ポータルに `国外処理` バッジを表示して区別する。
+   Opus 5 は user/residency タグ付きper-userアプリ推論プロファイル経由だけを許可し、システム `global.` 直指定は拒否する
 9. **Anthropic の use case フォーム提出（Model access の初回手続き）は必須**だが、執行が API で不整合:
    **Converse は未提出でも通る / InvokeModel は 404 で拒否**。`get-foundation-model-availability` が
    AUTHORIZED を返しても手続き完了を意味しない。Claude Code は InvokeModel を使うためここで止まる
@@ -128,7 +137,7 @@ cp .env.sample .env        # .env は .gitignore 済み。値を実値に置き�
 - **週次レポート**: 毎週月曜 09:30 JST に Teams へトークン消費量（モデル別）+ 概算費用 + 実コスト（タグ配賦）を投稿
   （[infra/usage_report.tf](infra/usage_report.tf) / [lambda/report_usage.py](lambda/report_usage.py)）。
   実コスト集計には事前にコスト配分タグの有効化が必要（プロジェクト全体は `Project` / `Phase`、利用者別内訳は
-  `user` / `app`。`aws ce update-cost-allocation-tags-status ...`。詳細は [docs/design.md](docs/design.md) §6）
+  `user` / `app` / `model`、国内/global別は `residency`。`aws ce update-cost-allocation-tags-status ...`。詳細は [docs/design.md](docs/design.md) §6）
 - **利用者本人での確認**: 利用者ポータル（[lambda/profile_ui.py](lambda/profile_ui.py)）に「利用者別コスト」を表示。
   EntraID サインイン後、`user` タグ（`app=claude-code`）で集計したコストを本人が確認できる。
   **月次（今月）** と **週次（過去4週間・◀▶ でスライド）** をタブで切り替え可能

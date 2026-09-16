@@ -1,6 +1,6 @@
 # VS Code セットアップ（検証 3・2026-07-14 時点）
 
-VS Code から Bedrock の jp. プロファイル（国内完結）を使う経路の整理。
+VS Code から Bedrock の国内3モデル（`jp.`）またはユーザー別 Opus 5（global）を使う経路の整理。
 
 | 方法 | 判定 |
 |---|---|
@@ -11,7 +11,8 @@ VS Code から Bedrock の jp. プロファイル（国内完結）を使う経�
 ## 方法A: Claude Code 拡張
 
 1. 拡張 `anthropic.claude-code` をインストール（Marketplace で「Claude Code」）
-2. **ワークスペース側**の `.claude/settings.json` に接続先を書く
+2. **ワークスペース側**の `.claude/settings.json` に接続先を書く。`ANTHROPIC_MODEL` は
+   利用者ポータルに表示された自分専用ARNを指定する（国内なら `opus`、国外処理許容なら `opus-5`）。
    （ユーザーグローバル `~/.claude/settings.json` に書くと**全プロジェクトが Bedrock 行きになる**ので注意）:
 
 ```json
@@ -19,9 +20,9 @@ VS Code から Bedrock の jp. プロファイル（国内完結）を使う経�
   "env": {
     "CLAUDE_CODE_USE_BEDROCK": "1",
     "AWS_REGION": "ap-northeast-1",
-    "ANTHROPIC_MODEL": "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<PROFILE_ID>",
-    "ANTHROPIC_SMALL_FAST_MODEL": "jp.anthropic.claude-haiku-4-5-20251001-v1:0",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "jp.anthropic.claude-haiku-4-5-20251001-v1:0"
+    "ANTHROPIC_MODEL": "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のPROFILE_ID>",
+    "ANTHROPIC_SMALL_FAST_MODEL": "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>"
   }
 }
 ```
@@ -51,10 +52,8 @@ AWS_BEARER_TOKEN_BEDROCK='<キー>' code -n <ワークスペース>
 考え方は同じ。OS 依存の差分だけ:
 
 - **設定ファイル**: ワークスペース側 `.claude\settings.json`（中身は上記 JSON と同一）
-- **キーの渡し方**: VS Code は GUI 起動でもユーザー環境変数を継ぐため、macOS のような
-  「完全終了 → ターミナルから起動」の縛りはない。恒久化するなら PowerShell で
-  `setx ANTHROPIC_MODEL "jp.anthropic.claude-opus-4-8"` 等。**ただしキー
-  （`AWS_BEARER_TOKEN_BEDROCK`）は `setx` で OS に恒久化しない**（週次ローテの秘密が全プロセスから
+- **キーの渡し方**: VS Code は GUI 起動でもユーザー環境変数を継ぐ。`ANTHROPIC_MODEL` は上記のper-user ARNを使う。
+  **キー（`AWS_BEARER_TOKEN_BEDROCK`）は `setx` で OS に恒久化しない**（週次ローテの秘密が全プロセスから
   読める）。セッション限定で渡すなら PowerShell から:
 
   ```powershell

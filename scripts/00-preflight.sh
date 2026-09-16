@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# 事前確認: CLI・認証・リージョン・Opus 4.8 のモデルアクセス有効化
+# 事前確認: CLI・認証・リージョン・国内3モデル + Opus 5 global の提供/契約状態
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
 require_cmd aws jq curl
+
+# .env に利用者向けBearerキーが入っていても、管理APIの事前確認は運用者のSigV4認証を使う。
+unset AWS_BEARER_TOKEN_BEDROCK
 
 echo "== 認証情報 =="
 aws sts get-caller-identity --output table
@@ -13,18 +16,32 @@ echo "呼び出し元エンドポイント: ${AWS_REGION}（jp. プロファイ�
 [[ "$AWS_REGION" == "ap-northeast-1" ]] || echo "⚠️ AWS_REGION が東京ではありません。国内完結の検証にならない可能性"
 
 echo
-echo "== 東京リージョンでの Opus 4.8 提供・モデルアクセス =="
-# byOutputModality TEXT で十分。アクセス未許可でも一覧には出るため、実際の可否は 02 の実測で確定する
+echo "== 東京リージョンでの Opus 4.8 / Opus 5 提供形態 =="
+# アクセス未許可でも一覧には出るため、Opus 5 は下段の availability でも確認する
 aws bedrock list-foundation-models --region "$AWS_REGION" \
   --by-provider anthropic \
-  --query "modelSummaries[?contains(modelId, 'opus-4-8')].{modelId:modelId, lifecycle:modelLifecycle.status, inference:inferenceTypesSupported | join(',', @)}" \
+  --query "modelSummaries[?contains(modelId, 'opus-4-8') || modelId == 'anthropic.claude-opus-5'].{modelId:modelId, lifecycle:modelLifecycle.status, inference:inferenceTypesSupported | join(',', @)}" \
   --output table
+
+echo
+echo "== Opus 5 の契約・認可・リージョン状態 =="
+aws bedrock get-foundation-model-availability --region "$AWS_REGION" \
+  --model-id anthropic.claude-opus-5 \
+  --query '{modelId:modelId,authorization:authorizationStatus,agreement:agreementAvailability.status,entitlement:entitlementAvailability,region:regionAvailability}' \
+  --output table
+
+echo
+echo "== Opus 5 global プロファイル =="
+aws bedrock get-inference-profile --region "$AWS_REGION" \
+  --inference-profile-identifier global.anthropic.claude-opus-5 \
+  --query '{id:inferenceProfileId,status:status,models:models[].modelArn}' \
+  --output json
 
 cat <<'EOF'
 
 判定:
-- 表に opus-4-8 が出ていれば東京リージョンで提供あり
-- inference 列に INFERENCE_PROFILE があれば「プロファイル経由での呼び出し」形態（ON_DEMAND 無しはモデル直叩き不可 = jp. プロファイル必須の裏付け）
-- モデルアクセス（コンソール > Bedrock > Model access）の有効化を忘れずに。未許可だと 02 で AccessDeniedException になる
+- Opus 4.8 / Opus 5 の inference が INFERENCE_PROFILE ならモデル直叩き不可
+- Opus 5 は authorization=AUTHORIZED、agreement/entitlement/region=AVAILABLE、globalプロファイル=ACTIVE が前提
+- Opus 5 の推論先はglobalであり国内固定ではない。利用者はポータルが作るper-user ARNからのみ呼ぶ
 次: ./scripts/01-list-jp-profiles.sh
 EOF
