@@ -116,7 +116,7 @@ Opus 5（global）追加を本番適用し、以下を実測で確認した。
 | Opus 5 per-user の実推論（本番キー） | ✅ 応答 `OK`、`inferenceRegion=eu-west-1`（global前提どおり） |
 | Opus 5 システムプロファイル直指定 | ✅ AccessDeniedException（棚卸し迂回を遮断） |
 | ポータルの冪等性 | ✅ 既存3モデルは再作成されず Opus 5 のみ追加 |
-| IAM シミュレーション 8 ケース | ✅ 許可5・拒吾3とも期待どおり |
+| IAM シミュレーション 8 ケース | ✅ 許可5・拒否3とも期待どおり |
 | Teams 通知（rotate_key notify_only） | ✅ `notified: true`、キー未ローテーション |
 | Teams 通知（週次レポート） | ✅ `posted: true, models: 4`。Opus 5 行を含む |
 | CloudTrail 監査 | ✅ 国内/global許可/違反の3分類が正しく判定 |
@@ -145,13 +145,41 @@ Opus 5（global）追加を本番適用し、以下を実測で確認した。
 
 | 確認項目 | 結果 |
 |---|---|
-| `CLAUDE_CODE_SUBAGENT_MODEL` に per-user Haiku ARN | ✅ 動作。CloudTrail の modelId は `ps3qb3yiseyf`（Haiku）で 5 回、メインは `lukfc2db79dy`（Opus） |
-| エイリアス `haiku` 指定 | ⚠️ 動作するが modelId が `jp.anthropic.claude-haiku-4-5-...`（システムプロファイル直）になり、**user タグが付かず未配賦** |
-| `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` | 必須。無いと組み込み Explore / Plan がメイン会話のモデル（Opus）を継承する |
+| `CLAUDE_CODE_SUBAGENT_MODEL` に per-user Haiku ARN | ✅ 動作。CloudTrail / JSON `modelUsage` ともper-user Haiku ARN、メインはper-user Opus ARN |
+| `haiku` + `ANTHROPIC_DEFAULT_HAIKU_MODEL=per-user ARN` | ✅ aliasがper-user ARNへ解決され、利用者別に配賦される（隔離環境で追加実測） |
+| `haiku` + Haiku固定なし | ⚠️ `jp.anthropic.claude-haiku-4-5-...`（システムプロファイル直）となり、**userタグが付かず未配賦** |
+| `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` | 全サブエージェント等へ強制する場合に必要。fork系はメインモデルを使う例外あり |
 
-**重要**: エイリアスでも IAM には拒否されない（(a-1) の jp.* 許可に当たるため）が、
-利用者別の棚卸しから静かに漏れる。必ず per-user ARN を指定させること。
+**重要**: `haiku` エイリアスの利用可否ではなく、`ANTHROPIC_DEFAULT_HAIKU_MODEL` が
+per-user ARNへ固定されているかが棚卸しを分ける。固定なしでもIAMには拒否されず（(a-1) の jp.* 許可）、
+未配賦へ静かに流れるため注意。事故を避ける推奨例はサブエージェント変数にもARNを直接指定する形。
 コスト差は入力 $5.5→$1.1 / 出力 $27.5→$5.5（約 1/5）。
+
+### 再確認（2026-09-17）
+
+Opus 5 全利用者展開後の定常状態を、デプロイ済みリソースに対して再実測した。
+
+| 確認項目 | 結果 |
+|---|---|
+| `terraform plan` | ✅ exit=0 / **No changes**（前回の Budget エラーは一過性の DNS 障害で、コード起因ではなかった） |
+| Opus 5 プロファイル存在 | ✅ 6 名分とも `ACTIVE` |
+| Opus 5 実推論（6 名分の per-user ARN） | ✅ 6/6 応答 `OK`（`in=16 / out=4` tokens） |
+| Teams 通知（rotate_key `notify_only`） | ✅ `{"rotated": false, "notified": true}` |
+| Teams 通知（週次レポート） | ✅ `{"posted": true, "models": 4}` |
+| 週次レポートの Opus 5 捕捉 | ✅ Lambda ログに `Opus 5 (global): 動的発見したプロファイル 6 件` |
+| `11-sync-user-profiles.sh --dry-run` | ✅ 6 名とも「変更なし（4 モデル）」= 収束済み・冪等 |
+| CloudTrail 監査 | ✅ 6 名分の Opus 5 が `eu-west-1 / global許可`、国内モデルは `ap-northeast-1` のまま。未許可の国外処理なし |
+
+実測中に判明した**運用上の罠を 2 件**修正した（いずれも既存コード・設定側の問題）。
+
+| 事象 | 原因 | 対処 |
+|---|---|---|
+| `aws` が `The config profile () could not be found` | `.env` の `AWS_PROFILE=`（空）を AWS CLI v2 が「空名のプロファイル」と解釈する。`scripts/*.sh` は `lib.sh` が unset するため無害だが、**手で `. ./.env` してから `aws` を叩く手順**では壊れる | `.env.sample` に注意書きを追記。手動時は `env -u AWS_PROFILE` を併用する |
+| `02-invoke-converse.sh` が `null` を表示 | `content[0].text` 固定。Opus 5 等は先頭ブロックが `reasoningContent`（thinking）で `text` を持たない | `text` を持つ最初のブロックを取る jq 式へ修正 |
+
+> ℹ️ このとき `.env` の `AWS_BEARER_TOKEN_BEDROCK` は失効していた（週次ローテーション済み・
+> サービス固有認証情報自体は 2 本とも Active）。**インフラ側の障害ではない**ため、
+> 上記の実推論は運用者の SigV4 で実施した。利用者は次回ポータルでキーを貼り替えれば復旧する。
 
 ## 付帯確認（判定には含めないが記録する）
 
