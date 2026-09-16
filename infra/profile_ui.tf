@@ -54,6 +54,11 @@ data "aws_iam_policy_document" "profile_ui" {
         "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/jp.*",
       ],
       [for r in local.jp_inference_regions : "arn:aws:bedrock:${r}::foundation-model/*"],
+      # Claude 5 系（global.）をポータルから作成できるようにする。
+      # 上と同構図でコピー元プロファイルとその foundation-model の両方の権限が要る。
+      # allow_global_models = false なら両方とも空リスト。
+      local.global_profile_arns,
+      local.global_foundation_model_arns,
     )
   }
 
@@ -120,6 +125,11 @@ resource "aws_lambda_function" "profile_ui" {
       ENTRA_TENANT_ID      = var.entra_tenant_id
       ENTRA_CLIENT_ID      = var.entra_client_id
       USER_PROFILE_APP_TAG = "claude-code"
+      # 作成対象モデルの定義を Terraform 側に一元化する（inference-profiles.tf と同じ locals を参照）。
+      # allow_global_models = false なら 5 系はここから消え、ポータルでも作成されなくなる。
+      # キー = 安定した model タグ値 / 値 = コピー元システムプロファイル ID。
+      # 既存の opus/sonnet/haiku キーは変更しない（既存プロファイルとの冪等性・集計互換性）。
+      MODEL_SOURCES_JSON = jsonencode(local.user_profile_models)
       # API キー表示用: rotate_key と同じ PoC ユーザ / SSM パラメータを参照する
       POC_USER_NAME = aws_iam_user.poc.name
       API_KEY_PARAM = local.api_key_param_name

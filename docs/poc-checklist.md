@@ -84,15 +84,59 @@
 ## コスト可視化（2026-07-14 追加実装）
 
 - ✅ 全リソース共通タグ（default_tags: `Project` / `Phase` / `ManagedBy`）
-- ✅ タグ付き**アプリケーション推論プロファイル ×3**（Opus 4.8 / Sonnet 4.6 / Haiku 4.5、jp. の複製）を配備し、
+- ✅ タグ付き**共有アプリケーション推論プロファイル ×3**（Opus 4.8 / Sonnet 4.6 / Haiku 4.5、jp. の複製）を配備し、
   ARN 経由の推論を実測（curl InvokeModel / Claude Code とも OK）。オンデマンド推論コストのタグ配賦は
   この方式が唯一の経路（リソースタグでは配賦不可）
+- ✅ **Opus 5 global のper-user経路をE2E実測（2026-09-16）**: 一時IAMユーザー + Bearer APIキー +
+  `user=e2e.validation` / `app=claude-code` / `model=opus-5` / `residency=global` 付きアプリプロファイルで
+  Converse応答 `OK`。同じキーで `global.anthropic.claude-opus-5` 直指定は AccessDenied。
+  一時ユーザー・ポリシー・APIキー・プロファイルは検証後すべて削除済み
+- ✅ Opus 5の提供状態: `authorizationStatus=AUTHORIZED` / agreement・entitlement・regionすべて `AVAILABLE`（2026-09-16）
 - 実測で踏んだ罠: `CreateInferenceProfile` の **description は ASCII のみ**（日本語で ValidationException）
 - 既知の限界: Zed 組み込みモデル（エージェント用 Sonnet 4.6）はタグ配賦不可（システムプロファイル直）
-- ⬜ **残タスク（初回のみ・24h 後）**: 課金データにタグが載った後にコスト配分タグを有効化
-  `aws ce update-cost-allocation-tags-status --cost-allocation-tags-status TagKey=Project,Status=Active TagKey=Phase,Status=Active`
-  （現状は "Tag keys not found" で拒否される — Billing にタグ未着のため）
+- コスト配分タグ: 利用者×モデル棚卸しには `user` / `app` / `model`、国内/global別には `residency` をActiveにする。
+  新規タグは最初のタグ付き課金後に認識され、有効化前へ遡及しない
+  - ✅ `user` / `app` / `model` は Active（`model` は 2026-09-16 に有効化）
+  - ⬜ `residency`: 初回の Opus 5 課金が Billing に到達してから（最大24h）再実行する。
+    現時点は `404 tag key missing`。コマンド:
+    `aws ce update-cost-allocation-tags-status --cost-allocation-tags-status TagKey=residency,Status=Active`
+    （未有効でも `model=opus-5` で国外分を判別できるため、棚卸し自体は成立する）
 - ⬜ Zed カスタム Opus 4.8 を ARN 指定に変更済み → 次回 Zed 利用時にチャット 1 回で動作確認
+
+## デプロイ実績（2026-09-16）
+
+Opus 5（global）追加を本番適用し、以下を実測で確認した。
+
+| 確認項目 | 結果 |
+|---|---|
+| `terraform apply` | ✅ 2 added / 5 changed / 0 destroyed、エラーなし |
+| IAM 管理ポリシー移行 | ✅ 9 statement をアタッチ。旧インラインは152バイトのスタブへ（権限断なし） |
+| Lambda 3本のコード更新 | ✅ profile_ui / report_usage / rotate_key とも新 CodeSha256 |
+| 国内3モデルの実推論（本番キー） | ✅ opus / sonnet / haiku とも応答、`inferenceRegion=ap-northeast-1` |
+| Opus 5 per-user の実推論（本番キー） | ✅ 応答 `OK`、`inferenceRegion=eu-west-1`（global前提どおり） |
+| Opus 5 システムプロファイル直指定 | ✅ AccessDeniedException（棚卸し迂回を遮断） |
+| ポータルの冪等性 | ✅ 既存3モデルは再作成されず Opus 5 のみ追加 |
+| IAM シミュレーション 8 ケース | ✅ 許可5・拒吾3とも期待どおり |
+| Teams 通知（rotate_key notify_only） | ✅ `notified: true`、キー未ローテーション |
+| Teams 通知（週次レポート） | ✅ `posted: true, models: 4`。Opus 5 行を含む |
+| CloudTrail 監査 | ✅ 国内/global許可/違反の3分類が正しく判定 |
+
+⚠️ 週次レポートで**月次予算 $200 に対し今月累計 $1,264.86（632%）**と判明。Opus 5 追加とは無関係の
+既存の超過だが、予算見直しか使用量抑制の判断が別途必要。
+
+### Opus 5 の全利用者展開（2026-09-16）
+
+`./scripts/11-sync-user-profiles.sh` で 6 名全員に展開し、実測で確認した。
+
+| 確認項目 | 結果 |
+|---|---|
+| プロファイル作成 | ✅ 5 件新規（takeshi.ohno は既存のため変更なし）= 冪等性を実証 |
+| タグ付与 | ✅ 全 6 名が `user` / `app=claude-code` / `model=opus-5` / `residency=global` |
+| IAM シミュレーション | ✅ 6 名とも allowed（eu-west-1 ルーティング時） |
+| 実推論（本番 Bearer キー） | ✅ 6 名全員の ARN で応答 `OK` |
+| 週次レポートの自動捕捉 | ✅ `Opus 5 (global): 動的発見したプロファイル 6 件` = 棚卸しに全員分が載る |
+| CloudTrail 監査 | ✅ 6 名分とも「global許可」と分類、国内モデルは ap-northeast-1 のまま |
+| Terraform | ✅ `validate` 成功 / `plan` = No changes（per-user プロファイルは管理外のため差分なし） |
 
 ## 付帯確認（判定には含めないが記録する）
 

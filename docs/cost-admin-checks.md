@@ -84,8 +84,8 @@ aws ce get-cost-and-usage \
 ## 4. モデル別コスト（想定外モデルの検知）
 
 サービス名 = モデル名なので、SERVICE ディメンションで金額のある行を並べるとモデル別内訳になる。
-**PoC 想定は Opus 4.8 / Sonnet 4.6 / Haiku 4.5 の 3 本**。それ以外（Sonnet 5・Opus 5 等）が出たら、
-別プロジェクト由来か、統制外の利用がないかを切り分ける。
+**本構成の想定は国内3モデル + Opus 5**。Sonnet 5など未許可モデルが出た場合や、Opus 5の金額が
+per-userタグ集計と対応しない場合は、別プロジェクト由来または統制外利用を切り分ける。
 
 ```bash
 aws ce get-cost-and-usage \
@@ -115,23 +115,29 @@ aws bedrock list-tags-for-resource --region ap-northeast-1 \
   --query 'tags' --output table
 ```
 
-各 per-user プロファイルに `user=<氏名>` / `app=claude-code` / `model=opus|sonnet|haiku` が揃っていること。
+各 per-user プロファイルに `user=<氏名>` / `app=claude-code` / `model=opus|sonnet|haiku|opus-5` が揃っていること。
+新規作成分は `residency=jp|global` も確認する。特に Opus 5 は `model=opus-5` / `residency=global` がIAM許可の必須条件。
 
 ---
 
-## 6. 国内完結の事後監査（residency）
+## 6. 推論リージョンの事後監査（residency）
 
-推論が国内（東京+大阪）から出ていないかを CloudTrail で確認する（[scripts/04-check-cloudtrail.sh](../scripts/04-check-cloudtrail.sh) と同趣旨）。
+`scripts/04-check-cloudtrail.sh` で次の3分類を確認する。
+
+- `国内`: ap-northeast-1/3（国内3モデルの正常系）
+- `global許可`: `user` / `app=claude-code` / `model` / `residency=global` が揃ったper-userプロファイルによる国外処理
+- `違反`: 上記per-userプロファイル以外による国外処理
 
 ```bash
-# 直近の InvokeModel の実処理リージョン（ap-northeast-1/3 以外が出たら統制破れ）
+# 直近イベントの概要（処理先と許可/違反の詳細判定は次のスクリプトで行う）
 aws cloudtrail lookup-events \
   --lookup-attributes AttributeKey=EventName,AttributeValue=InvokeModel \
   --max-results 20 --region ap-northeast-1 \
   --query 'Events[].{Time:EventTime,User:Username}' --output table
 ```
 
-`inferenceRegion` の中身まで見たいときは `scripts/04-check-cloudtrail.sh` を使う（CloudTrail は最大数分の記録遅延あり）。
+`inferenceRegion` とモデルプロファイルのタグを突合するには `scripts/04-check-cloudtrail.sh` を使う
+（CloudTrail は最大数分の記録遅延あり）。Opus 5 の国外処理は、タグ付きper-userプロファイル経由なら意図した例外として表示される。
 
 ---
 
@@ -155,9 +161,9 @@ aws budgets describe-budgets --account-id 269154581652 \
 aws ce update-cost-allocation-tags-status \
   --cost-allocation-tags-status TagKey=app,Status=Active
 
-# 複数まとめて
+# 複数まとめて（residency は一度タグ付き課金が発生してから認識される）
 aws ce update-cost-allocation-tags-status \
-  --cost-allocation-tags-status TagKey=user,Status=Active TagKey=app,Status=Active
+  --cost-allocation-tags-status TagKey=user,Status=Active TagKey=app,Status=Active TagKey=model,Status=Active TagKey=residency,Status=Active
 ```
 
 成功時のレスポンスは `{"Errors": []}`。反映（集計に現れる）まで最大 24h 程度かかる。

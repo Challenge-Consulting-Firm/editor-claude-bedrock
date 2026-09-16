@@ -1,8 +1,12 @@
 """利用者プロファイル管理 Web UI（Lambda Function URL・EntraID 認証）。
 
 「ユーザプロファイル」= 利用者ごとのコスト配賦用アプリケーション推論プロファイル
-（`cc-<user>-opus` / `cc-<user>-sonnet` / `cc-<user>-haiku`。タグ user / app=claude-code / model 付き）。
+（`cc-<user>-opus` / `-sonnet` / `-haiku` / `-opus-5`。タグ user / app=claude-code / model / residency 付き）。
 従来 docs/setup-claude-code.md §0.5 の AWS CLI 手動作成だったものを Web UI 化する。
+
+⚠️ 国内完結の可否はモデルで異なる（residency タグ）:
+  jp     = 推論も国内（東京+大阪）で完結。Opus 4.8 / Sonnet 4.6 / Haiku 4.5
+  global = 推論が国外へ出る。Claude 5 系（jp. プロファイル未提供のため）
 
 構成（design.md の流儀に合わせ最小構成）:
   - Lambda Function URL（authtype=NONE）1 本で HTML(SPA) と JSON API の両方を配信
@@ -12,15 +16,16 @@
 
 API:
   GET    /api/config          MSAL 用の公開設定（tenant_id / client_id）。認証不要
-  GET    /api/profiles        app=claude-code のプロファイルを {user:{opus,sonnet,haiku,...}} で返す
-  POST   /api/profiles        {"user": "..."} で当該利用者の opus+sonnet+haiku を作成（既存はスキップ）
+  GET    /api/profiles        app=claude-code のプロファイルを {user:{model:...}} で返す
+  POST   /api/profiles        {"user": "..."} で国内3モデル + 有効化済みglobalモデルを作成（既存はスキップ）
   DELETE /api/profiles        {"user": "..."} で当該利用者の全プロファイルを削除
   GET    /api/apikey          現行 Bedrock API キー本文 + 新旧 credential のメタ一覧を返す
-  GET    /api/cost            Cost Explorer から今月の利用者別コスト（app=claude-code を user で集計）を返す
+  GET    /api/cost            今月の利用者別コスト + user×model内訳を返す
                              ?range=weekly で過去4週間分（各7日）の週次内訳を新しい週順に返す
   それ以外の GET              SPA(HTML) を返す
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -46,16 +51,61 @@ API_KEY_PARAM = os.environ.get("API_KEY_PARAM", "")
 BEDROCK_CREDENTIAL_SERVICE = "bedrock.amazonaws.com"
 # 利用者別コスト集計（report_usage.py と同じタグ規約）: app=claude-code を user タグで GroupBy する。
 USER_TAG_KEY = os.environ.get("USER_TAG_KEY", "user")
+MODEL_TAG_KEY = os.environ.get("MODEL_TAG_KEY", "model")
 USER_APP_TAG_KEY = os.environ.get("USER_APP_TAG_KEY", "app")
 USER_APP_TAG_VALUE = APP_TAG_VALUE
 
 # 作成対象モデル（inference-profiles.tf / setup-claude-code.md §0.5 と一致させる）。
-# model タグ値 -> コピー元 jp. システムプロファイル ID
-MODEL_SOURCES = {
+# model タグ値 -> コピー元システムプロファイル ID
+#
+# ⚠️ 国内完結の可否がモデルで異なる:
+#   jp.*     = 推論も国内（東京+大阪）で完結
+#   global.* = 推論が国外に出る（実測 2026-09-16: opus-5 -> eu-west-1）
+# 5 系に jp. プロファイルは存在せず、東京固定で使う手段もないため、
+# 「開発効率を取るか国内完結を取るか」の選択を利用者に明示するため UI にバッジ表示する。
+#
+# 環境変数 MODEL_SOURCES_JSON で上書き可（Terraform から注入して定義を一元化するため）。
+_DEFAULT_MODEL_SOURCES = {
     "opus": "jp.anthropic.claude-opus-4-8",
     "sonnet": "jp.anthropic.claude-sonnet-4-6",
     "haiku": "jp.anthropic.claude-haiku-4-5-20251001-v1:0",
 }
+
+
+def _load_model_sources() -> dict:
+    """MODEL_SOURCES_JSON があれば検証して使い、不正なら既定定義へ戻す。"""
+    raw = os.environ.get("MODEL_SOURCES_JSON", "").strip()
+    if not raw:
+        return dict(_DEFAULT_MODEL_SOURCES)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("MODEL_SOURCES_JSON のパースに失敗。既定定義を使います")
+        return dict(_DEFAULT_MODEL_SOURCES)
+    valid = (
+        isinstance(parsed, dict)
+        and bool(parsed)
+        and all(
+            isinstance(model, str)
+            and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", model)
+            and isinstance(source, str)
+            and source.startswith(("jp.", "global.anthropic.claude-"))
+            for model, source in parsed.items()
+        )
+        and len(set(parsed.values())) == len(parsed)
+    )
+    if not valid:
+        logger.warning("MODEL_SOURCES_JSON の形式が不正です。既定定義を使います")
+        return dict(_DEFAULT_MODEL_SOURCES)
+    return dict(parsed)
+
+
+MODEL_SOURCES = _load_model_sources()
+
+
+def is_japan_resident(model: str) -> bool:
+    """そのモデルが国内完結（jp. プロファイル由来）か。不明な接頭辞は安全側に倒して False。"""
+    return MODEL_SOURCES.get(model, "").startswith("jp.")
 
 # 利用者名（= user タグ / IAM ユーザー名想定）。英小文字・数字・. _ - のみ許可。
 # create-inference-profile の名前はドット不可のため後段で `.`→`-` に置換する
@@ -78,18 +128,50 @@ def account_id() -> str:
 
 
 def source_arn(model: str) -> str:
+    if model not in MODEL_SOURCES:
+        raise KeyError(f"未定義のモデル: {model}")
     return f"arn:aws:bedrock:{AWS_REGION}:{account_id()}:inference-profile/{MODEL_SOURCES[model]}"
 
 
-def collect_user_profiles() -> dict:
-    """app=<APP_TAG_VALUE> のプロファイルを {user: {model: {"arn","name"}}} で返す。
+def _profile_name(user: str, model: str, reserved_names: set[str]) -> str:
+    """Bedrock の名前制約（英数区切り、最大64文字）を満たす一意な名前を返す。"""
+    user_stem = re.sub(r"[^a-z0-9]+", "-", user.lower()).strip("-") or "user"
+    model_stem = re.sub(r"[^a-z0-9]+", "-", model.lower()).strip("-") or "model"
+    base = f"cc-{user_stem}-{model_stem}"
+    if len(base) <= 64 and base not in reserved_names:
+        return base
 
-    rotate_key.collect_user_profiles と同じタグ規約。ここでは削除に使う name も持つ。
-    """
-    result: dict = {}
+    # 長い名前や正規化衝突時は元の user/model からハッシュを付けて識別する。
+    digest = hashlib.sha256(f"{user}\0{model}".encode()).hexdigest()[:10]
+    suffix = f"-{digest}-{model_stem}"
+    max_user_len = max(1, 64 - len("cc-") - len(suffix))
+    user_stem = user_stem[:max_user_len].rstrip("-") or "u"
+    candidate = f"cc-{user_stem}{suffix}"
+    if candidate not in reserved_names:
+        return candidate
+
+    # SHA-256 全体まで伸ばせば、既存名との偶発衝突にも決定的に対処できる。
+    for size in range(12, 65, 2):
+        digest = hashlib.sha256(f"{user}\0{model}".encode()).hexdigest()[:size]
+        suffix = f"-{digest}-{model_stem}"
+        max_user_len = 64 - len("cc-") - len(suffix)
+        if max_user_len < 1:
+            break
+        candidate = f"cc-{user_stem[:max_user_len].rstrip('-') or 'u'}{suffix}"
+        if candidate not in reserved_names:
+            return candidate
+    raise ValueError("一意な推論プロファイル名を生成できません")
+
+
+def _list_user_profile_records(reserved_names=None) -> list[dict]:
+    """app タグ対象を列挙し、任意で全アプリプロファイル名も収集する。"""
+    records = []
     paginator = bedrock.get_paginator("list_inference_profiles")
     for page in paginator.paginate(typeEquals="APPLICATION"):
         for profile in page.get("inferenceProfileSummaries", []):
+            name = profile.get("inferenceProfileName", "")
+            if reserved_names is not None and name:
+                reserved_names.add(name)
             arn = profile["inferenceProfileArn"]
             tags = {
                 t["key"]: t["value"]
@@ -101,42 +183,93 @@ def collect_user_profiles() -> dict:
             model = tags.get("model")
             if not user or not model:
                 continue
-            result.setdefault(user, {})[model] = {
+            raw_residency = tags.get("residency")
+            expected_residency = (
+                "jp" if MODEL_SOURCES[model].startswith("jp.") else "global"
+            ) if model in MODEL_SOURCES else None
+            effective_residency = expected_residency or (
+                raw_residency if raw_residency in ("jp", "global") else "unknown"
+            )
+            records.append({
+                "user": user,
+                "model": model,
                 "arn": arn,
-                "name": profile.get("inferenceProfileName", ""),
+                "name": name,
                 "id": profile.get("inferenceProfileId", ""),
-            }
+                "residency": effective_residency,
+                "residency_tagged": (
+                    raw_residency == expected_residency
+                    if expected_residency is not None
+                    else raw_residency in ("jp", "global")
+                ),
+            })
+    return records
+
+
+def collect_user_profiles() -> dict:
+    """app=<APP_TAG_VALUE> のプロファイルを利用者・モデル別に返す。"""
+    result: dict = {}
+    for record in _list_user_profile_records():
+        user = record["user"]
+        model = record["model"]
+        if model in result.setdefault(user, {}):
+            logger.warning("重複プロファイルを検出: user=%s model=%s", user, model)
+            continue
+        result[user][model] = {
+            key: record[key] for key in ("arn", "name", "id", "residency")
+        }
     return result
 
 
 def create_user_profiles(user: str) -> dict:
-    """利用者の opus/sonnet/haiku プロファイルを作成。既存分はスキップ。作成後の状態を返す。"""
-    existing = collect_user_profiles().get(user, {})
-    name_stem = user.replace(".", "-")  # プロファイル名にドットは使えない
-    for model, src_id in MODEL_SOURCES.items():
+    """利用者の全モデルプロファイルを作成。既存分はスキップ。作成後の状態を返す。
+
+    冪等: 既にあるモデルは作らない。これにより、既存利用者（opus/sonnet/haiku のみ保持）に対して
+    同じ POST を再実行するだけで Opus 5 が追加される（バックフィル兼用）。
+    """
+    reserved_names = set()
+    records = _list_user_profile_records(reserved_names)
+    user_records = [r for r in records if r["user"] == user]
+    existing = {r["model"] for r in user_records}
+
+    # residency 導入前の既存プロファイルと、値が誤っているものを修復する。
+    # model が現行定義にあるものだけを対象にし、未知の過去モデルは勝手に変更しない。
+    for record in user_records:
+        if record["model"] in MODEL_SOURCES and not record["residency_tagged"]:
+            bedrock.tag_resource(
+                resourceARN=record["arn"],
+                tags=[{"key": "residency", "value": record["residency"]}],
+            )
+
+    for model in MODEL_SOURCES:
         if model in existing:
             continue  # 冪等: 既にあれば作らない
+        name = _profile_name(user, model, reserved_names)
         bedrock.create_inference_profile(
-            inferenceProfileName=f"cc-{name_stem}-{model}",
+            inferenceProfileName=name,
             modelSource={"copyFrom": source_arn(model)},
             tags=[
                 {"key": "user", "value": user},
                 {"key": "app", "value": APP_TAG_VALUE},
                 {"key": "model", "value": model},
+                # 棚卸し用: 国内完結か否かをタグでも追えるようにする
+                # （Cost Explorer / Resource Groups での絞り込みに使える）
+                {
+                    "key": "residency",
+                    "value": "jp" if is_japan_resident(model) else "global",
+                },
             ],
         )
+        reserved_names.add(name)
     return collect_user_profiles().get(user, {})
 
 
 def delete_user_profiles(user: str) -> int:
-    """利用者の app=<APP_TAG_VALUE> プロファイルを全削除。削除件数を返す。"""
-    profiles = collect_user_profiles().get(user, {})
-    count = 0
-    for model, info in profiles.items():
-        # 削除は識別子（ARN でも ID/名前でも可）で行う
-        bedrock.delete_inference_profile(inferenceProfileIdentifier=info["arn"])
-        count += 1
-    return count
+    """利用者の app=<APP_TAG_VALUE> プロファイルを重複も含め全削除する。"""
+    records = [r for r in _list_user_profile_records() if r["user"] == user]
+    for record in records:
+        bedrock.delete_inference_profile(inferenceProfileIdentifier=record["arn"])
+    return len(records)
 
 
 def collect_api_key() -> dict:
@@ -214,14 +347,70 @@ def _fetch_cost_by_user(start: str, end: str, granularity: str) -> list:
     return [{"period_start": ps, "by_user": periods[ps]} for ps in sorted(periods)]
 
 
-def _summarize(by_user: dict[str, float]) -> dict:
-    """{user: amount} を UI 向けの {"users":[{user,amount}],"unallocated","total"} に整形する。"""
+def _ce_tag_value(raw: str, key: str) -> str:
+    """Cost Explorer の `<key>$<value>` 形式から値を取り出す。"""
+    return raw.removeprefix(f"{key}$")
+
+
+def _fetch_cost_by_user_model(start: str, end: str, granularity: str) -> list:
+    """[start,end) のコストを user × model で返す。modelタグ未有効時は空を返す。"""
+    periods: dict[str, dict[str, dict[str, float]]] = {}
+    token = None
+    try:
+        while True:
+            kwargs = dict(
+                TimePeriod={"Start": start, "End": end},
+                Granularity=granularity,
+                Metrics=["UnblendedCost"],
+                Filter={"Tags": {"Key": USER_APP_TAG_KEY, "Values": [USER_APP_TAG_VALUE]}},
+                GroupBy=[
+                    {"Type": "TAG", "Key": USER_TAG_KEY},
+                    {"Type": "TAG", "Key": MODEL_TAG_KEY},
+                ],
+            )
+            if token:
+                kwargs["NextPageToken"] = token
+            resp = ce.get_cost_and_usage(**kwargs)
+            for period in resp.get("ResultsByTime", []):
+                p_start = period.get("TimePeriod", {}).get("Start", start)
+                bucket = periods.setdefault(p_start, {})
+                for group in period.get("Groups", []):
+                    keys = group.get("Keys", [])
+                    if len(keys) < 2:
+                        continue
+                    user = _ce_tag_value(keys[0], USER_TAG_KEY)
+                    model = _ce_tag_value(keys[1], MODEL_TAG_KEY)
+                    amount = float(group["Metrics"]["UnblendedCost"]["Amount"])
+                    models = bucket.setdefault(user, {})
+                    models[model] = models.get(model, 0.0) + amount
+            token = resp.get("NextPageToken")
+            if not token:
+                break
+    except ClientError as exc:
+        logger.warning("user×modelコスト取得失敗（modelタグ未有効化の可能性）: %s", exc)
+        return []
+    return [
+        {"period_start": period, "by_user_model": periods[period]}
+        for period in sorted(periods)
+    ]
+
+
+def _summarize(by_user: dict[str, float], by_user_model=None) -> dict:
+    """利用者合計と、任意のモデル別内訳をUI向けに整形する。"""
+    by_user_model = by_user_model or {}
     by_user = dict(by_user)
     unallocated = by_user.pop("", 0.0)
-    users = [
-        {"user": u, "amount": round(v, 2)}
-        for u, v in sorted(by_user.items(), key=lambda kv: kv[1], reverse=True)
-    ]
+    users = []
+    for user, amount in sorted(by_user.items(), key=lambda item: item[1], reverse=True):
+        models = [
+            {"model": model or "(未配賦)", "amount": round(model_amount, 2)}
+            for model, model_amount in sorted(
+                by_user_model.get(user, {}).items(),
+                key=lambda item: item[1],
+                reverse=True,
+            )
+        ]
+        users.append({"user": user, "amount": round(amount, 2), "models": models})
     total = sum(by_user.values()) + unallocated
     return {
         "users": users,
@@ -243,7 +432,18 @@ def collect_cost_by_user() -> dict:
     for b in buckets:
         for u, v in b["by_user"].items():
             merged[u] = merged.get(u, 0.0) + v
-    return {"month": now.strftime("%Y-%m"), "currency": "USD", **_summarize(merged)}
+    model_buckets = _fetch_cost_by_user_model(start, end, "MONTHLY")
+    merged_models: dict[str, dict[str, float]] = {}
+    for bucket in model_buckets:
+        for user, models in bucket["by_user_model"].items():
+            user_models = merged_models.setdefault(user, {})
+            for model, amount in models.items():
+                user_models[model] = user_models.get(model, 0.0) + amount
+    return {
+        "month": now.strftime("%Y-%m"),
+        "currency": "USD",
+        **_summarize(merged, merged_models),
+    }
 
 
 def collect_weekly_cost_by_user(weeks: int = 4) -> dict:
@@ -263,12 +463,17 @@ def collect_weekly_cost_by_user(weeks: int = 4) -> dict:
         start.strftime("%Y-%m-%d"), end_exclusive.strftime("%Y-%m-%d"), "DAILY"
     )
 
+    daily_models = _fetch_cost_by_user_model(
+        start.strftime("%Y-%m-%d"), end_exclusive.strftime("%Y-%m-%d"), "DAILY"
+    )
+
     # 週の境界（[week_start, week_end) を末尾側から weeks 本）
     bounds = [
         (end_exclusive - timedelta(days=7 * (i + 1)), end_exclusive - timedelta(days=7 * i))
         for i in range(weeks)
     ]
     week_buckets: list[dict[str, float]] = [{} for _ in bounds]
+    week_model_buckets: list[dict[str, dict[str, float]]] = [{} for _ in bounds]
     for day in daily:
         d = datetime.strptime(day["period_start"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
         for idx, (w_start, w_end) in enumerate(bounds):
@@ -278,13 +483,26 @@ def collect_weekly_cost_by_user(weeks: int = 4) -> dict:
                     bucket[u] = bucket.get(u, 0.0) + v
                 break
 
+    for day in daily_models:
+        date = datetime.strptime(day["period_start"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        for index, (week_start, week_end) in enumerate(bounds):
+            if week_start <= date < week_end:
+                bucket = week_model_buckets[index]
+                for user, models in day["by_user_model"].items():
+                    user_models = bucket.setdefault(user, {})
+                    for model, amount in models.items():
+                        user_models[model] = user_models.get(model, 0.0) + amount
+                break
+
     weeks_out = []
-    for (w_start, w_end), bucket in zip(bounds, week_buckets):
+    for (w_start, w_end), bucket, model_bucket in zip(
+        bounds, week_buckets, week_model_buckets
+    ):
         weeks_out.append({
             "weekStart": w_start.strftime("%Y-%m-%d"),
             # 表示用の週末日は排他 End の前日（=その週の最終日）
             "weekEnd": (w_end - timedelta(days=1)).strftime("%Y-%m-%d"),
-            **_summarize(bucket),
+            **_summarize(bucket, model_bucket),
         })
     # bounds は新しい順（i=0 が直近週）なのでそのまま返す
     return {"currency": "USD", "weeks": weeks_out}
@@ -320,7 +538,7 @@ def _method_and_path(event) -> tuple:
     return ctx.get("method", "GET"), event.get("rawPath", "/")
 
 
-def handler(event, context):  # noqa: ARG001
+def handler(event, context):
     method, path = _method_and_path(event)
 
     # 認証不要: MSAL 初期化用の公開設定
@@ -367,11 +585,37 @@ def handler(event, context):  # noqa: ARG001
     if path == "/api/profiles":
         try:
             if method == "GET":
-                return _resp(200, {"profiles": collect_user_profiles(), "models": list(MODEL_SOURCES)})
+                profiles = collect_user_profiles()
+                # models は従来どおり名前の配列（下位互換）。
+                # modelMeta で residency を追加提供し、UI が国内/グローバルを区別表示できるようにする。
+                return _resp(
+                    200,
+                    {
+                        "profiles": profiles,
+                        "models": list(MODEL_SOURCES),
+                        "modelMeta": {
+                            m: {
+                                "source": src,
+                                "residency": "jp" if src.startswith("jp.") else "global",
+                            }
+                            for m, src in MODEL_SOURCES.items()
+                        },
+                    },
+                )
 
-            body = json.loads(event.get("body") or "{}")
-            user = (body.get("user") or "").strip().lower()
-            if not _USER_RE.match(user):
+            if method not in ("POST", "DELETE"):
+                return _resp(405, {"error": "許可されていないメソッド"})
+            try:
+                body = json.loads(event.get("body") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                return _resp(400, {"error": "JSON リクエスト本文が不正です"})
+            if not isinstance(body, dict):
+                return _resp(400, {"error": "JSON リクエスト本文はオブジェクトで指定してください"})
+            user_value = body.get("user")
+            if not isinstance(user_value, str):
+                return _resp(400, {"error": "user は文字列で指定してください"})
+            user = user_value.strip().lower()
+            if not _USER_RE.fullmatch(user):
                 return _resp(400, {"error": "user は英小文字・数字・.（ドット）・_ ・- のみ、1〜64 文字"})
 
             if method == "POST":
@@ -380,7 +624,9 @@ def handler(event, context):  # noqa: ARG001
             if method == "DELETE":
                 logger.info("プロファイル削除: user=%s caller=%s", user, caller)
                 return _resp(200, {"user": user, "deleted": delete_user_profiles(user)})
-            return _resp(405, {"error": "許可されていないメソッド"})
+        except (KeyError, ValueError) as exc:
+            logger.warning("未定義モデル: %s", exc)
+            return _resp(400, {"error": str(exc)})
         except ClientError as exc:
             logger.exception("Bedrock 操作失敗")
             return _resp(502, {"error": f"Bedrock 操作に失敗: {exc.response['Error'].get('Code', 'Unknown')}"})
@@ -461,6 +707,12 @@ INDEX_HTML = """<!DOCTYPE html>
   .arn { display: flex; align-items: baseline; gap: .5rem; margin: .2rem 0; }
   .tag { font-size: .72rem; color: #fff; background: var(--text-tertiary);
     border-radius: var(--radius); padding: .05rem .4rem; flex: none; letter-spacing: .03em; }
+  /* 国外ルーティングモデル（Claude 5 系）の警告色。国内完結と見分けられるようにする */
+  .tag.global { background: var(--muji-red); }
+  .resnote { font-size: .72rem; color: var(--text-tertiary); flex: none; }
+  .model-cost { font-size: .72rem; color: var(--text-tertiary); background: var(--surface-alt);
+    border-radius: var(--radius); padding: .05rem .4rem; display: inline-block; margin: .1rem .15rem .1rem 0; }
+  .model-cost.global { color: #fff; background: var(--muji-red); }
   /* クリックでコピーできる ARN。ヒント付き */
   .copy { cursor: pointer; border-bottom: 1px dashed var(--gray-300); transition: color .12s; }
   .copy:hover { color: var(--muji-red); border-bottom-color: var(--muji-red); }
@@ -514,9 +766,11 @@ INDEX_HTML = """<!DOCTYPE html>
 </header>
 
 <div class="wrap">
-<p class="lead">利用者ごとのコスト配賦用アプリケーション推論プロファイル（<code>cc-&lt;user&gt;-opus</code> /
-<code>cc-&lt;user&gt;-sonnet</code> / <code>cc-&lt;user&gt;-haiku</code>）を管理します。作成すると Opus 4.8・Sonnet 4.6・Haiku 4.5 の 3 本が
-<code>user</code> / <code>app=claude-code</code> / <code>model</code> タグ付きで作られます。</p>
+<p class="lead">利用者ごとのコスト配賦用アプリケーション推論プロファイル（<code>cc-&lt;user&gt;-&lt;model&gt;</code>）を管理します。
+作成すると、環境で有効なモデルが <code>user</code> / <code>app=claude-code</code> / <code>model</code> / <code>residency</code>
+タグ付きで作られます。Opus 5を有効化している環境では <span class="tag global">国外処理</span> と表示されます。</p>
+<p class="lead" style="font-size:.82rem;color:var(--text-tertiary)">※ Opus 5は国内完結（jp. プロファイル）が未提供のため、
+推論が日本国外で実行されます（実測: Opus 5 → アイルランド）。機密度の高いコードには国内完結モデルを選んでください。</p>
 
 <!-- #msg は signin/app どちらの画面でも見えるよう外に置く（初期化・サインイン失敗も表示するため） -->
 <div id="msg"></div>
@@ -773,9 +1027,14 @@ function switchCostTab(range) {
 function renderCostTable(data, cur) {
   const money = (v) => cur + Number(v).toFixed(2);
   let html = '<table style="margin-top:.5rem"><thead><tr><th>利用者</th><th style="text-align:right">コスト</th></tr></thead><tbody>';
-  if (data.users && data.users.length) {
+if (data.users && data.users.length) {
     for (const u of data.users) {
-      html += "<tr><td><strong>" + esc(u.user) + "</strong></td>" +
+      const models = (u.models || []).map((m) =>
+        '<span class="model-cost' + (m.model === "opus-5" ? " global" : "") + '">' +
+        esc(m.model) + ": " + esc(money(m.amount)) + "</span>"
+      ).join(" ");
+      html += "<tr><td><strong>" + esc(u.user) + "</strong>" +
+        (models ? '<div style="margin-top:.25rem">' + models + "</div>" : "") + "</td>" +
         '<td style="text-align:right">' + esc(money(u.amount)) + "</td></tr>";
     }
   } else {
@@ -867,8 +1126,11 @@ async function loadProfiles() {
         const span = document.createElement("span");
         span.className = "arn";
         const arn = models[m].arn;
-        span.innerHTML = '<span class="tag">' + esc(m) + "</span>" +
-          '<code class="copy" title="クリックでコピー">' + esc(arn) + "</code>";
+        // residency が global のモデル（Claude 5 系）は推論が国外に出るため明示する
+        const isGlobal = models[m].residency === "global";
+        span.innerHTML = '<span class="tag' + (isGlobal ? " global" : "") + '">' + esc(m) + "</span>" +
+          '<code class="copy" title="クリックでコピー">' + esc(arn) + "</code>" +
+          (isGlobal ? '<span class="resnote" title="推論が日本国外で実行されます">国外処理</span>' : "");
         const codeEl = span.querySelector("code");
         codeEl.onclick = () => copyText(arn, codeEl);
         td1.appendChild(span);

@@ -55,7 +55,8 @@ Azure 版との対応:
 | 区分 | 範囲 | 決まり方 |
 |---|---|---|
 | 保管（at rest） | 呼び出し元リージョン = 東京 | エンドポイントのリージョン |
-| 推論（inference） | **東京 + 大阪**（国外へ出ない） | `jp.` クロスリージョン推論プロファイル |
+| 推論（inference）・**4.x** | **東京 + 大阪**（国外へ出ない） | `jp.` クロスリージョン推論プロファイル |
+| 推論（inference）・**5 系** | ⚠️ **国外（実測: eu-west-1 / us-east-1）** | `global.` プロファイルのみ。jp. 未提供（§4.1） |
 
 - モデル: **Claude Opus 4.8**（Bedrock 提供開始 2026-05-28、東京リージョン提供・`jp.` プロファイル対応の報告あり）
 - プロファイル ID は**実測（`scripts/01`）で確定**。`.env` の `JP_PROFILE_ID` が全スクリプト・エディタ設定の単一の参照点
@@ -82,6 +83,35 @@ Bedrock では IAM で**技術的に強制**する（[infra/main.tf](../infra/ma
    → us-east-1 等の bedrock-runtime へ回り込む迂回を封じる
 3. **任意**: `aws:SourceIp` による IP allowlist（`ALLOWED_IPS` 設定時。Azure 版 R2 相当）
 
+### 4.1 Claude 5 系の例外（国内完結を意図的に放棄する範囲・2026-09-16）
+
+開発効率を優先し、**Claude 5 系に限りグローバルルーティングを許容**する（`allow_global_models = true`）。
+5 系は jp. プロファイルが無く、東京固定で使う手段もない（README「実測で分かった制約」#8）ため、
+「国内完結 vs 最新モデル」の二択になる。統制の穴を最小化するため次の設計とする:
+
+- 許可する基盤モデルは **allowlist の明示列挙のみ**（`global_model_profile_ids`）。`global.*` のワイルドカードは使わない
+  — 同じ接頭辞で `global.openai.*` / `global.xai.*` が東京に実在し、一括開放になるため
+- **利用者は `global.` システムプロファイルを直接呼べない**。`user` / `app=claude-code` / `model=opus-5` /
+  `residency=global` の揃ったper-userアプリ推論プロファイルだけを許可し、Cost Explorerの利用者集計を迂回させない
+- 国内リージョン以外を拒否する Deny は、allowlist モデルの **foundation-model ARNだけ**を `NotResource` で除外する。
+  システムプロファイルARNは除外しないため、直指定は引き続き拒否される
+- `allow_global_models = false` に戻せば global 用statementとポータル作成対象が消え、**従来の完全国内完結構成に戻る**
+
+検証（`simulate-principal-policy`・2026-09-16 実測）:
+
+| 対象 | 期待 | 結果 |
+|---|---|---|
+| Opus 5 の user/residency タグ付きアプリプロファイル（国外routing） | allow | ✅ allowed |
+| `global.anthropic.claude-opus-5` システムプロファイル直指定 | deny | ✅ implicitDeny |
+| `jp.` Opus 4.8（東京/大阪） | allow | ✅ allowed（デグレなし） |
+| Opus 4.8 を us-east-1 で直叩き | deny | ✅ explicitDeny |
+| `global.xai.grok-4.6` / `global.openai.gpt-6-astra` | deny | ✅ explicitDeny |
+| `global.anthropic.claude-fable-5`（allowlist 外の兄弟モデル） | deny | ✅ explicitDeny |
+
+⚠️ 実装上の罠: statement が増えてポリシーが **3061 バイト**になり、IAM ユーザの
+**インラインポリシー上限 2048 バイト**を超える（`put-user-policy` で `LimitExceeded` を実測）。
+このため `aws_iam_user_policy`（インライン）から **`aws_iam_policy` + attachment（管理ポリシー・上限 6144）**へ移行済み。
+
 検証: `scripts/03` のネガティブテスト（`jp.` 以外のプロファイル指定 → 403 AccessDenied を期待）。
 
 ## 5. 認証・キー運用
@@ -99,18 +129,23 @@ Bedrock では IAM で**技術的に強制**する（[infra/main.tf](../infra/ma
 
 ## 6. 監査・コスト
 
-- **residency 監査**: CloudTrail（Event history 90 日・追加設定不要）で `InvokeModel` / `Converse` の
-  `additionalEventData.inferenceRegion` を確認（`scripts/04`）。`ap-northeast-1/3` 以外が出たら統制破れ
+- **residency 監査**: CloudTrail（Event history 90 日・追加設定不要）の `additionalEventData.inferenceRegion` と
+  アプリプロファイルのタグを突合する（`scripts/04`）。国内モデルは ap-northeast-1/3 のみ、
+  `model=opus-5` / `residency=global` のper-userプロファイルだけ国外処理を許容し、それ以外は違反
 - **利用量・コスト**: PoC は Budgets のソフト通知（50/75/90% 実績 + 100% 予測）+ **タグ配賦**。
   - 全リソースに共通タグ `Project=editor-claude-bedrock` / `Phase=poc` / `ManagedBy=terraform`（provider の default_tags）
   - **推論コストの配賦はタグ付きアプリケーション推論プロファイル経由**（[infra/inference-profiles.tf](../infra/inference-profiles.tf)。
     Bedrock のオンデマンド課金はリソース非依存のため、リソースタグだけでは配賦できない — これが AWS の公式解）。
-    Opus 4.8 / Sonnet 4.6 / Haiku 4.5 の 3 本を配備済み。エディタ/CLI は ARN を model に指定する（実測済み）
+    Opus 4.8 / Sonnet 4.6 / Haiku 4.5 に加え、**Opus 5（global）** をper-userプロファイルとして配備。エディタ/CLIはポータルに表示された自分専用ARNを指定する。
+    実測（2026-09-16）: `global.` から複製したアプリ推論プロファイルでも invoke は成立し、
+    CloudWatch の `ModelId` にプロファイル ID が記録される = **棚卸しの仕組みは 4.x と同じまま 5 系にも効く**。
+    プロファイルには `residency` タグ（`jp` / `global`）も付与し、国内完結か否かで集計・絞り込みできるようにする。
+    Opus 5のシステムプロファイル直指定と共有プロファイルは許可せず、ユーザー別配賦を必須化する
   - ⚠️ 制約: **Zed の組み込みモデル（エージェント用 Sonnet 4.6）はシステム jp. プロファイル直なのでタグ配賦されない**
     （Cost Explorer では「Bedrock 全体 −（タグ付き合計）」として把握）。Claude Code は ARN 指定でフル配賦可能
   - 初回のみ: 課金データにタグが現れた後（利用開始から最大 24h）、コスト配分タグを有効化する。
-    プロジェクト全体は `Project` / `Phase`、**利用者別内訳には `user` / `app` も**有効化する（遡及しない＝有効化日以降の課金のみ集計対象）:
-    `aws ce update-cost-allocation-tags-status --cost-allocation-tags-status TagKey=Project,Status=Active TagKey=Phase,Status=Active TagKey=user,Status=Active TagKey=app,Status=Active`
+    プロジェクト全体は `Project` / `Phase`、**利用者×モデル内訳には `user` / `app` / `model`、国内/global別には `residency`** を有効化する（遡及しない＝有効化日以降の課金のみ集計対象）:
+    `aws ce update-cost-allocation-tags-status --cost-allocation-tags-status TagKey=Project,Status=Active TagKey=Phase,Status=Active TagKey=user,Status=Active TagKey=app,Status=Active TagKey=model,Status=Active TagKey=residency,Status=Active`
   - ⚠️ Cost Explorer 上、Bedrock 推論は `Amazon Bedrock` ではなく `Claude Opus 4.8 (Amazon Bedrock Edition)` 等の
     **モデル別サービス名**で計上される。SERVICE=`Amazon Bedrock` で絞ると $0 になるため、利用者別はタグで集計する
   - 管理者が随時コスト・監査を確認するコマンド集は [cost-admin-checks.md](cost-admin-checks.md) に集約
