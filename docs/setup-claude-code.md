@@ -161,8 +161,7 @@ export AWS_BEARER_TOKEN_BEDROCK='<配布されたキー>'
 # 主力モデル: 必ず利用者ポータルに表示された自分専用 ARN を指定する
 # 国内完結なら opus、最新モデル（国外処理許容）なら opus-5 の ARN
 export ANTHROPIC_MODEL='arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のPROFILE_ID>'
-# 補助タスクも利用者ポータルの自分専用 haiku ARN を指定して配賦する
-export ANTHROPIC_SMALL_FAST_MODEL='arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>'
+# 補助タスク（サマリ等）も利用者ポータルの自分専用 haiku ARN を指定して配賦する
 export ANTHROPIC_DEFAULT_HAIKU_MODEL='arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>'
 # コスト削減（推奨）: 調査・検索を行うサブエージェントも Haiku に固定する（§1.5）
 export CLAUDE_CODE_SUBAGENT_MODEL='arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>'
@@ -177,7 +176,6 @@ export CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1
     "CLAUDE_CODE_USE_BEDROCK": "1",
     "AWS_REGION": "ap-northeast-1",
     "ANTHROPIC_MODEL": "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のPROFILE_ID>",
-    "ANTHROPIC_SMALL_FAST_MODEL": "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>",
     "CLAUDE_CODE_SUBAGENT_MODEL": "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>",
     "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "1"
@@ -187,6 +185,13 @@ export CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1
 
 > キー（`AWS_BEARER_TOKEN_BEDROCK`）は settings.json に書かずシェル環境変数で渡すこと
 > （設定ファイルの共有・コミット事故を防ぐ）。
+
+> ※ **`ANTHROPIC_SMALL_FAST_MODEL` は使わない**（旧設定・2026-09-16 削除）。
+> 現行のモデル固定は `ANTHROPIC_DEFAULT_OPUS_MODEL` / `..._SONNET_MODEL` / `..._HAIKU_MODEL` /
+> `..._FABLE_MODEL` の 4 つで行うのが公式の推奨（[Enterprise deployment overview](https://docs.claude.com/en/docs/claude-code/bedrock-vertex-proxies)
+> 「Pin model versions for cloud providers」）。補助タスクは `ANTHROPIC_DEFAULT_HAIKU_MODEL` が後継。
+> 旧変数は CLI 2.1.273 でも後方互換で動作する（実測でエラー・警告なし）ため急いで外す必要はないが、
+> 新規設定では書かない。
 
 節約したい日常タスクは `--model <自分の cc-<user>-sonnet ARN>` への切替も可
 （システム `jp.` の直指定は共有キー利用時のユーザー別棚卸しを迂回するため使わない。単価はOpus $5.5/$27.5、Sonnet $3.3/$16.5、Haiku $1.1/$5.5 per 1M・jp +10%込み。Opus 5は単価確認中）。

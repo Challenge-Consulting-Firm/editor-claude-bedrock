@@ -816,7 +816,7 @@ INDEX_HTML = """<!DOCTYPE html>
     <p class="muted">各エディタの初回セットアップ手順です。上のキー・ARN をコピーして貼り付けてください。</p>
     <ul class="docs">
       <li><a href="https://github.com/Challenge-Consulting-Firm/editor-claude-bedrock/blob/main/docs/setup-claude-code.md" target="_blank" rel="noopener">Claude Code CLI</a>
-        <span class="muted">— ANTHROPIC_MODEL に Opus の ARN、節約時は Sonnet の ARN、ANTHROPIC_SMALL_FAST_MODEL / ANTHROPIC_DEFAULT_HAIKU_MODEL に Haiku の ARN</span></li>
+        <span class="muted">— ANTHROPIC_MODEL に Opus の ARN、節約時は Sonnet の ARN、ANTHROPIC_DEFAULT_HAIKU_MODEL に Haiku の ARN</span></li>
       <li><a href="https://github.com/Challenge-Consulting-Firm/editor-claude-bedrock/blob/main/docs/setup-vscode.md" target="_blank" rel="noopener">VS Code（Claude Code 拡張）</a>
         <span class="muted">— 環境変数 AWS_BEARER_TOKEN_BEDROCK にキー、ANTHROPIC_MODEL に Opus の ARN</span></li>
       <li><a href="https://github.com/Challenge-Consulting-Firm/editor-claude-bedrock/blob/main/docs/setup-zed.md" target="_blank" rel="noopener">Zed</a>
