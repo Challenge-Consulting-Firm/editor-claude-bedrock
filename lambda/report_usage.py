@@ -210,42 +210,89 @@ def fmt_usd(v):
     return f"${v:.2f}"
 
 
-def build_user_cost_lines(cost_by_user):
-    """利用者別コストの Markdown 行を組む。取得失敗/空なら注記のみ返す。"""
-    lines = ["**■ 利用者別コスト**（Cost Explorer・`app=claude-code` を `user` タグで集計）", ""]
+def build_user_cost_lines(cost_by_user, cost_by_user_mtd=None, period_label=""):
+    """利用者別コストの Markdown 行を組む。取得失敗/空なら注記のみ返す。
+
+    cost_by_user_mtd を渡すと「期間中」と「今月累計」を並べて表示する。
+    レポート上部の「今月累計」と同じ期間の列を並べることで、
+    「利用者別の合計が今月累計と合わない」という誤解を防ぐ（実際には集計期間が違うだけ）。
+    """
+    has_mtd = isinstance(cost_by_user_mtd, dict)
+    span = f"期間中 = {period_label}" if period_label else "期間中"
+    header = "**■ 利用者別コスト**（Cost Explorer・`app=claude-code` を `user` タグで集計）"
+    lines = [header, ""]
     if cost_by_user is None:
         lines += ["取得失敗（`user` / `app` コスト配分タグ未有効化または権限不足の可能性）", ""]
         return lines
-    if not cost_by_user:
+    if not cost_by_user and not (has_mtd and cost_by_user_mtd):
         lines += ["データなし（期間中の配賦対象コストなし）", ""]
         return lines
-    lines += ["| 利用者 | コスト |", "|:--|--:|"]
+
+    mtd = cost_by_user_mtd if has_mtd else {}
+    # どちらかの期間に出てくる利用者をすべて網羅する
+    # （今週未利用だが今月は使った人を落とさない）。
+    all_users = set(cost_by_user) | set(mtd)
+
+    if has_mtd:
+        lines += [f"| 利用者 | {span} | 今月累計 |", "|:--|--:|--:|"]
+    else:
+        lines += [f"| 利用者 | {span} |", "|:--|--:|"]
+
     # 未配賦（空 user）は末尾にまとめ、それ以外は金額降順
+    # （並び順は「今月累計ありならそちら、無ければ期間中」を主キーにする）
+    named = [u for u in all_users if u != ""]
+    sort_key = (lambda u: (mtd.get(u, 0.0), cost_by_user.get(u, 0.0))) if has_mtd \
+        else (lambda u: cost_by_user.get(u, 0.0))
+    for user in sorted(named, key=sort_key, reverse=True):
+        if has_mtd:
+            lines.append(
+                f"| {user} | {fmt_usd(cost_by_user.get(user, 0.0))} | {fmt_usd(mtd.get(user, 0.0))} |"
+            )
+        else:
+            lines.append(f"| {user} | {fmt_usd(cost_by_user.get(user, 0.0))} |")
+
     unallocated = cost_by_user.get("", 0.0)
-    named = {u: v for u, v in cost_by_user.items() if u != ""}
-    for user, usd in sorted(named.items(), key=lambda kv: kv[1], reverse=True):
-        lines.append(f"| {user} | {fmt_usd(usd)} |")
-    if unallocated > 0:
-        lines.append(f"| (未配賦) | {fmt_usd(unallocated)} |")
-    lines.append(f"| **合計** | **{fmt_usd(sum(cost_by_user.values()))}** |")
+    unallocated_mtd = mtd.get("", 0.0)
+    if unallocated > 0 or unallocated_mtd > 0:
+        if has_mtd:
+            lines.append(f"| (未配賦) | {fmt_usd(unallocated)} | {fmt_usd(unallocated_mtd)} |")
+        else:
+            lines.append(f"| (未配賦) | {fmt_usd(unallocated)} |")
+
+    if has_mtd:
+        lines.append(
+            f"| **合計** | **{fmt_usd(sum(cost_by_user.values()))}** | **{fmt_usd(sum(mtd.values()))}** |"
+        )
+    else:
+        lines.append(f"| **合計** | **{fmt_usd(sum(cost_by_user.values()))}** |")
     lines.append("")
-    if unallocated > 0:
+    if has_mtd:
+        lines.append(
+            "※ 「今月累計」列の合計は上記「実コスト › 今月累計」と一致する。"
+            f"「{span}」列は集計期間が短いため少なくなる（差分は月初〜期間開始前の利用）"
+        )
+    if unallocated > 0 or unallocated_mtd > 0:
         lines.append(
             "※ (未配賦) = `user` タグ有効化前・課金反映前（最大24h）・タグなし呼出（Zed 組み込みモデル等）の合算"
         )
     return lines
 
 
-def build_message(period_label, rows, weekly_cost, mtd_cost, cost_by_user=None):
+def build_message(period_label, rows, weekly_cost, mtd_cost, cost_by_user=None, cost_by_user_mtd=None,
+                  month_label="月初から今日"):
     # Teams（Power Automate 経由）は webhook の text を Markdown 描画する:
     #   - 単独 \n はスペースに潰れる（＝ソフト改行）
     #   - 空行(\n\n) は段落区切りとして効く
     #   - コードブロック(```)は非対応（文字のまま出る）
     # したがって空白での桁揃えは不可能。整列は Markdown テーブル、改行は空行で組む。
+    #
+    # ⚠️ 各セクションの見出しには**必ず集計期間を明記**する。
+    #    トークン消費量・利用者別コストは「直近 REPORT_DAYS 日」、実コストの今月累計は「月初から」で
+    #    期間が異なるため、明記しないと「合計が合わない」と誤解される（実際は不一致ではない）。
     lines = [
         f"**【エディタ用 Claude (Bedrock)】週次利用状況レポート（{period_label}）**",
         "",
-        "**■ トークン消費量**（CloudWatch Metrics・全呼出含む）",
+        f"**■ トークン消費量**（CloudWatch Metrics・全呼出含む・**{period_label}**）",
         "",
         "| モデル | 入力 | 出力 | キャッシュ読取 | キャッシュ書込 | 概算費用 |",
         "|:--|--:|--:|--:|--:|:--|",
@@ -299,15 +346,15 @@ def build_message(period_label, rows, weekly_cost, mtd_cost, cost_by_user=None):
         "",
     ]
     if weekly_cost is not None:
-        weekly_line = f"期間中: {fmt_usd(weekly_cost)}"
+        weekly_line = f"期間中（{period_label}）: {fmt_usd(weekly_cost)}"
     else:
         weekly_line = "期間中: 取得失敗（Cost Explorer 未有効化または権限不足の可能性）"
     if mtd_cost is not None:
         if MONTHLY_BUDGET_USD > 0:
             pct = mtd_cost / MONTHLY_BUDGET_USD * 100
-            mtd_line = f"今月累計: {fmt_usd(mtd_cost)}（月次予算 {fmt_usd(MONTHLY_BUDGET_USD)} の {pct:.0f}%）"
+            mtd_line = f"今月累計（{month_label}）: {fmt_usd(mtd_cost)}（月次予算 {fmt_usd(MONTHLY_BUDGET_USD)} の {pct:.0f}%）"
         else:
-            mtd_line = f"今月累計: {fmt_usd(mtd_cost)}"
+            mtd_line = f"今月累計（{month_label}）: {fmt_usd(mtd_cost)}"
     else:
         mtd_line = "今月累計: 取得失敗"
     # 空行で段落区切りを入れ、各行が確実に別行になるようにする
@@ -318,9 +365,15 @@ def build_message(period_label, rows, weekly_cost, mtd_cost, cost_by_user=None):
         "実コスト・利用者別コストは app=claude-code タグ配賦分のみで、"
         "タグなし呼出（Zed 組み込みモデル等）は含まれない"
     )
+    lines.append("")
+    lines.append(
+        f"ℹ️ 上の「トークン消費量」と「期間中」は **{period_label}** の値、"
+        f"「今月累計」は **{month_label}** の値で、集計期間が異なる（不一致ではない）。"
+        "両方を突き合わせるなら下記「利用者別コスト」の 2 列を見る"
+    )
 
-    # 利用者別内訳（期間中 = 直近 REPORT_DAYS 日）
-    lines += ["", *build_user_cost_lines(cost_by_user)]
+    # 利用者別内訳（期間中 = 直近 REPORT_DAYS 日 / 今月累計 = 月初から）
+    lines += ["", *build_user_cost_lines(cost_by_user, cost_by_user_mtd, period_label)]
     return "\n".join(lines)
 
 
@@ -355,13 +408,20 @@ def handler(event, context):  # noqa: ARG001
     # 3. 実コスト（週次 + 月次累計）
     weekly_cost = get_cost(ce_start, ce_end)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    mtd_cost = get_cost(month_start.strftime("%Y-%m-%d"), ce_end)
+    ce_month_start = month_start.strftime("%Y-%m-%d")
+    mtd_cost = get_cost(ce_month_start, ce_end)
 
-    # 3b. 利用者別内訳（期間中 = 直近 REPORT_DAYS 日）
+    # 3b. 利用者別内訳。「期間中（直近 REPORT_DAYS 日）」と「今月累計」の両方を取る。
+    # 後者が無いと、上部の「今月累計」と利用者別合計が一致せず「合わない」と見えてしまう。
     cost_by_user = get_cost_by_user(ce_start, ce_end)
+    cost_by_user_mtd = get_cost_by_user(ce_month_start, ce_end)
 
     # 4. Teams 投稿（失敗したら関数ごと失敗させる）
-    message = build_message(f"{ce_start}〜{now.strftime('%Y-%m-%d')}", rows, weekly_cost, mtd_cost, cost_by_user)
+    period_label = f"{ce_start}〜{now.strftime('%Y-%m-%d')}"
+    month_label = f"{ce_month_start}〜{now.strftime('%Y-%m-%d')}"
+    message = build_message(
+        period_label, rows, weekly_cost, mtd_cost, cost_by_user, cost_by_user_mtd, month_label
+    )
     webhook_url = ssm.get_parameter(Name=WEBHOOK_PARAM, WithDecryption=True)["Parameter"]["Value"]
     post_teams(webhook_url, message)
     logger.info("週次レポート投稿完了:\n%s", message)
