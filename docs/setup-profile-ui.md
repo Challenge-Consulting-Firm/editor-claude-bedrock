@@ -125,7 +125,9 @@ apply 後、出力 `profile_ui_url`（API Gateway の URL）が UI の URL。
 
 - **コスト配分タグの有効化**は別途必要（利用者集計は `user` / `app`、国内・globalの切り分けには
   `residency`。[setup-claude-code.md](setup-claude-code.md) §0.5 の手順）。UI はプロファイルを作るだけで、Billing 側のタグ有効化は行わない
-- Opus 5 は `global.` から複製し、ポータル上で「国外処理」と表示する。IAM はシステムプロファイル直指定を拒否し、
-  `user` / `app=claude-code` / `model=opus-5` / `residency=global` の揃ったper-userプロファイルだけを許可
+- **現在は全モデルが国内完結**（`residency=jp`）のため、ポータルに「国外処理」バッジが出るモデルはない
+  （国外ルーティングの Opus 5 は 2026-09-24 に廃止済み）。将来 global モデルを再導入した場合は、
+  IAM がシステムプロファイル直指定を拒否し、`user` / `app=claude-code` / `model` / `residency=global` の
+  揃ったper-userプロファイルだけを許可する（UI は `residency` タグを見てバッジを出す）
 - **未実測**: 本 UI は 2026-08 追加分で、エディタ疎通（検証 3）のような実機確認は未実施。
   Entra アプリ登録・Function URL の CORS 挙動は初回デプロイ時に要確認
