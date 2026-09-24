@@ -98,8 +98,9 @@ def discover_profile_metric_ids() -> dict:
 def augment_metric_ids(models) -> list:
     """MODELS_JSON 各モデルの metric_ids に、動的発見した cc-* プロファイル ID を併合する。
 
-    model_tag（"opus" / "sonnet" / "haiku"）が対応キー。併合は重複除去つき。
-    MODELS_JSON に対応行のない model タグ（新モデルのポータル追加など）は警告を出す。
+    model タグ（"opus" / "sonnet" / "haiku" / "opus-5-5" / "opus-5" 等）が対応キー。
+    完全一致で併合し、`opus-5` と `opus-5-5` のような前方一致する名前も混在させない。
+    併合は重複除去つき。MODELS_JSON に対応行のない model タグ（新モデルのポータル追加など）は警告を出す。
     """
     discovered = discover_profile_metric_ids()
     if not discovered:

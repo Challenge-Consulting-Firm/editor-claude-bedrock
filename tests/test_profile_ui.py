@@ -154,6 +154,23 @@ class ProfileUiTests(unittest.TestCase):
         # residency が正しく付いている既存分は再タグ付けしない
         self.assertEqual(fake.tagged, [])
 
+    def test_existing_opus_5_5_with_wrong_residency_is_repaired_without_recreation(self):
+        """国内モデルへ移行した既存タグがglobalでも、jpへ修復し重複を作らない。"""
+        profiles = [summary("p1", "cc-user-opus-5-5")]
+        fake = FakeBedrock(
+            profiles,
+            {profiles[0]["inferenceProfileArn"]: tags("user.name", "opus-5-5", "global")},
+        )
+        with patch.object(profile_ui, "bedrock", fake):
+            profile_ui.create_user_profiles("user.name")
+
+        created_models = [c["tags"][2]["value"] for c in fake.created]
+        self.assertNotIn("opus-5-5", created_models)
+        self.assertEqual(
+            fake.tagged,
+            [{"resourceARN": profiles[0]["inferenceProfileArn"], "tags": [{"key": "residency", "value": "jp"}]}],
+        )
+
     def test_long_and_symbol_heavy_user_names_generate_valid_unique_names(self):
         first = profile_ui._profile_name("_" * 64, "opus-5", set())
         second = profile_ui._profile_name("_" * 64, "sonnet-5", {first})
@@ -172,6 +189,36 @@ class ProfileUiTests(unittest.TestCase):
             deleted = profile_ui.delete_user_profiles("user.name")
         self.assertEqual(deleted, 2)
         self.assertEqual(len(fake.deleted), 2)
+
+    def test_profiles_api_exposes_residency_metadata_without_breaking_models_list(self):
+        """既存の models 配列を保ちつつ、UI が国内/globalを名前ではなくメタ情報で判定できること。"""
+        with (
+            patch.object(profile_ui, "_require_auth", return_value={"oid": "caller"}),
+            patch.object(profile_ui, "collect_user_profiles", return_value={}),
+        ):
+            response = profile_ui.handler(
+                {
+                    "requestContext": {"http": {"method": "GET"}},
+                    "rawPath": "/api/profiles",
+                    "headers": {},
+                },
+                None,
+            )
+
+        self.assertEqual(response["statusCode"], 200)
+        body = json.loads(response["body"])
+        self.assertIn("opus-5-5", body["models"])
+        self.assertIn("opus-5", body["models"])
+        self.assertEqual(body["modelMeta"]["opus-5-5"]["residency"], "jp")
+        self.assertEqual(body["modelMeta"]["opus-5"]["residency"], "global")
+        self.assertEqual(body["modelMeta"]["opus-5-5"]["source"], "jp.anthropic.claude-opus-5-5")
+
+    def test_ui_loads_residency_metadata_before_rendering_cost(self):
+        """初回表示でも global バッジが安定するよう、profiles取得後にcostを描画すること。"""
+        self.assertIn("loadProfiles().then(() => loadCost());", profile_ui.INDEX_HTML)
+        self.assertNotIn("loadProfiles();\n  loadCost();", profile_ui.INDEX_HTML)
+        self.assertIn('return modelResidency[model] === "global";', profile_ui.INDEX_HTML)
+        self.assertIn("await ensureModelResidency();", profile_ui.INDEX_HTML)
 
     def test_invalid_json_and_non_string_user_return_400(self):
         auth = patch.object(profile_ui, "_require_auth", return_value={"oid": "caller"})

@@ -5,8 +5,8 @@ Claude Code CLI から Bedrock の **国内4モデル（`jp.`）と Opus 5（`gl
 
 ## 0. 前提（運用者側で完了済みであること）
 
-- アカウントの **Anthropic use case フォーム提出**と **Opus 4.8 / Opus 5 の契約・認可**
-  （`scripts/00-preflight.sh` で Opus 5 が `AUTHORIZED` / `AVAILABLE` か確認）
+- アカウントの **Anthropic use case フォーム提出**と **Opus 4.8 / Opus 5 / Opus 5.5 の提供・認可確認**
+  （`scripts/00-preflight.sh` で Opus 5.5 の `jp.` プロファイルと国内推論先、Opus 5 のglobal利用条件を確認）
 - 利用者用 IAM ユーザー + jp. 限定ポリシー（[infra/main.tf](../infra/main.tf)）
 - Bedrock API キーの発行（`scripts/10-issue-api-key.sh`。有効期限つき）
 - **利用者ごとのアプリケーション推論プロファイル**（コスト配賦用。次節参照）
@@ -27,6 +27,7 @@ Opus 5 は global ルーティングを継承する。いずれもユーザー�
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 REGION=ap-northeast-1
 OPUS_SRC="arn:aws:bedrock:${REGION}:${ACCOUNT_ID}:inference-profile/jp.anthropic.claude-opus-4-8"
+OPUS_55_SRC="arn:aws:bedrock:${REGION}:${ACCOUNT_ID}:inference-profile/jp.anthropic.claude-opus-5-5"
 SONNET_SRC="arn:aws:bedrock:${REGION}:${ACCOUNT_ID}:inference-profile/jp.anthropic.claude-sonnet-4-6"
 HAIKU_SRC="arn:aws:bedrock:${REGION}:${ACCOUNT_ID}:inference-profile/jp.anthropic.claude-haiku-4-5-20251001-v1:0"
 
@@ -38,6 +39,11 @@ for U in takeshi.ohno riku.ibaraki takashi.kuwabara daisuke.kawashima yusuke.kob
     --model-source copyFrom="$OPUS_SRC" \
     --tags key=user,value=$U key=app,value=claude-code key=model,value=opus key=residency,value=jp \
     --query 'inferenceProfileArn' --output text | sed "s|^|${U} opus: |"
+  aws bedrock create-inference-profile --region "$REGION" \
+    --inference-profile-name "cc-${N}-opus-5-5" \
+    --model-source copyFrom="$OPUS_55_SRC" \
+    --tags key=user,value=$U key=app,value=claude-code key=model,value=opus-5-5 key=residency,value=jp \
+    --query 'inferenceProfileArn' --output text | sed "s|^|${U} opus-5-5: |"
   aws bedrock create-inference-profile --region "$REGION" \
     --inference-profile-name "cc-${N}-sonnet" \
     --model-source copyFrom="$SONNET_SRC" \
@@ -60,6 +66,7 @@ done
 $ACCOUNT_ID = aws sts get-caller-identity --query Account --output text
 $REGION = "ap-northeast-1"
 $OPUS_SRC = "arn:aws:bedrock:${REGION}:${ACCOUNT_ID}:inference-profile/jp.anthropic.claude-opus-4-8"
+$OPUS_55_SRC = "arn:aws:bedrock:${REGION}:${ACCOUNT_ID}:inference-profile/jp.anthropic.claude-opus-5-5"
 $SONNET_SRC = "arn:aws:bedrock:${REGION}:${ACCOUNT_ID}:inference-profile/jp.anthropic.claude-sonnet-4-6"
 $HAIKU_SRC = "arn:aws:bedrock:${REGION}:${ACCOUNT_ID}:inference-profile/jp.anthropic.claude-haiku-4-5-20251001-v1:0"
 
@@ -73,6 +80,12 @@ foreach ($U in $users) {
     --tags key=user,value=$U key=app,value=claude-code key=model,value=opus key=residency,value=jp `
     --query 'inferenceProfileArn' --output text
   Write-Output "$U opus: $opus"
+  $opus55 = aws bedrock create-inference-profile --region $REGION `
+    --inference-profile-name "cc-$N-opus-5-5" `
+    --model-source copyFrom="$OPUS_55_SRC" `
+    --tags key=user,value=$U key=app,value=claude-code key=model,value=opus-5-5 key=residency,value=jp `
+    --query 'inferenceProfileArn' --output text
+  Write-Output "$U opus-5-5: $opus55"
   $sonnet = aws bedrock create-inference-profile --region $REGION `
     --inference-profile-name "cc-$N-sonnet" `
     --model-source copyFrom="$SONNET_SRC" `
@@ -161,8 +174,8 @@ foreach ($U in $users) {
 > 許可対象の基盤モデルはallowlistで明示列挙し、システム `global.` の直指定は許可しない。
 > （同じ接頭辞の `global.openai.*` / `global.xai.*` 等を巻き込まないため）。
 > Opus 5 は利用者ポータルに表示された `user` タグ付きARNからのみ利用できる。
-> jp. 版 Opus 5 が提供されたらコピー元を差し替えて国内完結に戻せる
-> （Opus 5.5 はまさにこのパターンで 2026-09-24 に国内化した）。
+> Opus 5 と Opus 5.5 は別モデル ID のため、既存 Opus 5 のコピー元を差し替えるのではなく併存させる。
+> 将来 `jp.anthropic.claude-opus-5` 自体が提供された場合に限り、Opus 5 の国内化を別途検討する。
 
 ## 1. 利用者の設定
 
@@ -180,7 +193,7 @@ export CLAUDE_CODE_USE_BEDROCK=1
 export AWS_REGION=ap-northeast-1
 export AWS_BEARER_TOKEN_BEDROCK='<配布されたキー>'
 # 主力モデル: 必ず利用者ポータルに表示された自分専用 ARN を指定する
-# 国内完結なら opus、最新モデル（国外処理許容）なら opus-5 の ARN
+# 国内完結の最新モデルなら opus-5-5、従来モデルなら opus、国外処理を許容する場合だけ opus-5
 export ANTHROPIC_MODEL='arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のPROFILE_ID>'
 # 補助タスク（サマリ等）も利用者ポータルの自分専用 haiku ARN を指定して配賦する
 export ANTHROPIC_DEFAULT_HAIKU_MODEL='arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のHAIKU_PROFILE_ID>'
@@ -215,8 +228,10 @@ export CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1
 > 旧変数は CLI 2.1.273 でも後方互換で動作する（実測でエラー・警告なし）ため急いで外す必要はないが、
 > 新規設定では書かない。
 
-節約したい日常タスクは `--model <自分の cc-<user>-sonnet ARN>` への切替も可
-（システム `jp.` の直指定は共有キー利用時のユーザー別棚卸しを迂回するため使わない。単価はOpus $5.5/$27.5、Sonnet $3.3/$16.5、Haiku $1.1/$5.5 per 1M・jp +10%込み。Opus 5は単価確認中）。
+節約したい日常タスクは `--model <自分の cc-<user>-sonnet ARN>`、国内完結で高性能を優先するなら
+`--model <自分の cc-<user>-opus-5-5 ARN>` へ切替できる。システム `jp.` の直指定は共有キー利用時の
+ユーザー別棚卸しを迂回するため使わない。単価は Opus 4.8 $5.5/$27.5、Sonnet $3.3/$16.5、
+Haiku $1.1/$5.5 per 1M（jp +10%込み）。Opus 5 / Opus 5.5 は単価確認中。
 
 ## 1.5. サブエージェントのモデルを安いものに固定する（コスト削減・推奨）
 

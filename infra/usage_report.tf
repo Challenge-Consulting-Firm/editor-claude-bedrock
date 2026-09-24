@@ -44,7 +44,8 @@ locals {
   # - metric_ids は CloudWatch Metrics の ModelId ディメンションに実測で現れる値を並べる。
   #   Lambda が実行時に app=claude-code のプロファイルを列挙して model_tag 経由で自動併合するため、
   #   ここは過去分（jp. システム ID・旧 editor-claude-*-jp・削除済み cc-*）のフォールバック扱い。
-  # - model_tag は動的併合の対応キー（cc-* プロファイルの model タグ値: opus / sonnet / haiku）。
+  # - model_tag は動的併合の完全一致キー（例: opus / sonnet / haiku / opus-5-5 / opus-5）。
+  #   `opus-5` と `opus-5-5` は別行として集計し、前方一致で混在させない。
   # - in_price/out_price は 1M トークンあたりの USD 単価（jp. +10% 込み）。未確定なら null で「単価未設定」表示。
   #   実測（2026-09-03、CE の USAGE_TYPE 別単価を CW トークン数で逆算。8/26=Opusのみの日で分離）:
   #     Opus 4.8   = $5.00/$25.00 ×1.1（従来 $6/$30 は誤りだったため訂正）

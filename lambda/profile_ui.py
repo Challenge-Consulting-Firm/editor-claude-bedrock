@@ -1,7 +1,8 @@
 """利用者プロファイル管理 Web UI（Lambda Function URL・EntraID 認証）。
 
 「ユーザプロファイル」= 利用者ごとのコスト配賦用アプリケーション推論プロファイル
-（`cc-<user>-opus` / `-sonnet` / `-haiku` / `-opus-5-5`。タグ user / app=claude-code / model / residency 付き）。
+（`cc-<user>-opus` / `-sonnet` / `-haiku` / `-opus-5-5` / `-opus-5`。
+タグ user / app=claude-code / model / residency 付き）。
 従来 docs/setup-claude-code.md §0.5 の AWS CLI 手動作成だったものを Web UI 化する。
 
 ⚠️ 国内完結の可否はモデルで異なる（residency タグ）:
@@ -17,7 +18,7 @@
 API:
   GET    /api/config          MSAL 用の公開設定（tenant_id / client_id）。認証不要
   GET    /api/profiles        app=claude-code のプロファイルを {user:{model:...}} で返す
-  POST   /api/profiles        {"user": "..."} で国内3モデル + 有効化済みglobalモデルを作成（既存はスキップ）
+  POST   /api/profiles        {"user": "..."} で国内モデル（Opus 5.5 含む）+ 有効化済みglobalモデルを作成（既存はスキップ）
   DELETE /api/profiles        {"user": "..."} で当該利用者の全プロファイルを削除
   GET    /api/apikey          現行 Bedrock API キー本文 + 新旧 credential のメタ一覧を返す
   GET    /api/cost            今月の利用者別コスト + user×model内訳を返す
@@ -228,7 +229,7 @@ def create_user_profiles(user: str) -> dict:
     """利用者の全モデルプロファイルを作成。既存分はスキップ。作成後の状態を返す。
 
     冪等: 既にあるモデルは作らない。これにより、既存利用者（opus/sonnet/haiku のみ保持）に対して
-    同じ POST を再実行するだけで Opus 5 が追加される（バックフィル兼用）。
+    同じ POST を再実行するだけで Opus 5.5 / Opus 5 が不足分だけ追加される（バックフィル兼用）。
     """
     reserved_names = set()
     records = _list_user_profile_records(reserved_names)
@@ -710,7 +711,7 @@ INDEX_HTML = """<!DOCTYPE html>
   .arn { display: flex; align-items: baseline; gap: .5rem; margin: .2rem 0; }
   .tag { font-size: .72rem; color: #fff; background: var(--text-tertiary);
     border-radius: var(--radius); padding: .05rem .4rem; flex: none; letter-spacing: .03em; }
-  /* 国外ルーティングモデル（Claude 5 系）の警告色。国内完結と見分けられるようにする */
+  /* residency=global のモデルだけに使う警告色。モデル世代名では判定しない */
   .tag.global { background: var(--muji-red); }
   .resnote { font-size: .72rem; color: var(--text-tertiary); flex: none; }
   .model-cost { font-size: .72rem; color: var(--text-tertiary); background: var(--surface-alt);
@@ -881,8 +882,9 @@ function render() {
 
 function reloadAll() {
   loadApiKey();
-  loadProfiles();
-  loadCost();
+  // modelMeta.residency を先に確定してからコストを描画する。
+  // 並列実行すると /api/cost が先に返った場合、国外モデルの色分けが初回だけ欠落する。
+  loadProfiles().then(() => loadCost());
 }
 
 // クリップボードコピー（要素の data-copy を使う。フォールバックあり）。
@@ -1028,6 +1030,10 @@ function isGlobalModel(model) {
   return modelResidency[model] === "global";
 }
 
+async function ensureModelResidency() {
+  if (!Object.keys(modelResidency).length) await loadProfiles();
+}
+
 function switchCostTab(range) {
   if (costRange === range) return;
   costRange = range;
@@ -1070,6 +1076,8 @@ if (data.users && data.users.length) {
 async function loadCost() {
   const box = document.getElementById("cost");
   box.innerHTML = '<span class="muted">読み込み中…</span>';
+  // タブを初期ロード完了前に操作した場合も、モデル名ではなく residency で色分けできるようにする。
+  await ensureModelResidency();
   try {
     if (costRange === "weekly") {
       weeklyData = await api("GET", null, "/api/cost?range=weekly");
@@ -1145,7 +1153,8 @@ async function loadProfiles() {
         const span = document.createElement("span");
         span.className = "arn";
         const arn = models[m].arn;
-        // residency が global のモデル（Claude 5 系）は推論が国外に出るため明示する
+        // residency が global のモデルだけ、推論が国外に出ることを明示する。
+        // Claude の世代名で判定しない（Opus 5.5 は 5 系だが国内完結）。
         const isGlobal = models[m].residency === "global";
         span.innerHTML = '<span class="tag' + (isGlobal ? " global" : "") + '">' + esc(m) + "</span>" +
           '<code class="copy" title="クリックでコピー">' + esc(arn) + "</code>" +

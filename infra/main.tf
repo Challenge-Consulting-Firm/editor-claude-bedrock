@@ -1,9 +1,9 @@
 # Bedrock エディタ利用者向け IAM ポリシー。
-# 国内3モデルは jp. プロファイル、Opus 5 は user/residency タグ付きの
+# 国内モデル（Opus 5.5 を含む）は jp. プロファイル、Opus 5 は user/residency タグ付きの
 # per-user application inference profile 経由に限定する。
 #
 # 迂回防止の設計（docs/design.md §4）:
-#   - 国内3モデル: jp.* 推論プロファイル + 東京/大阪の foundation-model のみ
+#   - 国内モデル: jp.* 推論プロファイル + 東京/大阪の foundation-model のみ
 #   - Opus 5: allowlistしたglobal基盤モデルを、user/app/model/residencyタグ付き
 #     application profile経由でのみ許可。globalシステムプロファイル直指定は拒否
 #   - 明示Denyで、上記の許可済みglobal経路以外は国内リージョン外への迂回を封じる
@@ -27,7 +27,7 @@ data "aws_iam_policy_document" "jp_only_invoke" {
     resources = local.jp_profile_arn_patterns
   }
 
-  # (a-2) 国内3モデルのコスト配賦用アプリケーション推論プロファイル。
+  # (a-2) 国内モデル（Opus 5.5 を含む）のコスト配賦用アプリケーション推論プロファイル。
   #       user/app/model の3タグが正しく付いたものだけを許可する。既存プロファイルには
   #       residency タグが無いため、国内モデルは後方互換のため同タグを必須にしない。
   #       - タグ条件は Service Authorization Reference で InvokeModel* × application-inference-profile
@@ -239,8 +239,10 @@ data "aws_iam_policy_document" "jp_only_invoke" {
 #   管理ポリシーは 6144 バイトまで許容されるためこちらに移行する。
 #   （ポリシーの中身・評価結果は変わらない。アタッチ先も同じ PoC ユーザ 1 人）
 resource "aws_iam_policy" "jp_only_invoke" {
-  name        = "jp-only-bedrock-invoke"
-  path        = "/editor-claude-bedrock/"
+  name = "jp-only-bedrock-invoke"
+  path = "/editor-claude-bedrock/"
+  # description は AWS 側で変更時に ForceNew（管理ポリシーの置換）になるため、
+  # 権限断を避けて既存値を維持する。Opus 5.5 を含む最新の説明は上部コメントと docs/design.md を正とする。
   description = "Bedrock invoke policy: Japan-resident 4.x plus per-user application profiles for allowlisted global Claude 5 models"
   policy      = data.aws_iam_policy_document.jp_only_invoke.json
 }

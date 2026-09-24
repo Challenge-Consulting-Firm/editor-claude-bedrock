@@ -35,9 +35,9 @@ locals {
     opus-5-5 = "jp.anthropic.claude-opus-5-5"
   }
 
-  # Claude global プロファイル。既定は Opus 5 のみ。⚠️ 国内完結ではない
+  # global. プロファイル利用モデル。既定は Opus 5 のみ。⚠️ 国内完結ではない
   # （実測 2026-09-16: opus-5 -> eu-west-1）。
-  # globalモデルは jp. プロファイルが存在せず、東京の foundation-model ARN からの
+  # 現在の allowlist 対象 Opus 5 は jp. プロファイルが存在せず、東京の foundation-model ARN からの
   # アプリ推論プロファイル作成も不可（On Demand 非対応）なため、
   # copy_from は global. プロファイルを指すしかない。
   # 実測済み: global. から複製したアプリプロファイルでも invoke は成功し、
@@ -49,8 +49,9 @@ locals {
   } : {}
 
   # 共有プロファイルは既存の国内3モデルだけを Terraform 管理する。
-  # globalモデルの共有プロファイルを作ると per-user ARN と取り違えて棚卸しを迂回し得るため、
-  # profile_ui が作る user タグ付き cc-<user>-* のみに限定する。
+  # Opus 5.5 は利用者別棚卸しを必須にするため、国内モデルでも共有プロファイルを作らない。
+  # globalモデルも共有すると per-user ARN と取り違えて棚卸しを迂回し得るため、
+  # 追加モデルは profile_ui が作る user タグ付き cc-<user>-* のみに限定する。
   app_profile_models = local.app_profile_models_jp
 
   # プロファイル名のサフィックス（共有プロファイルは全て国内完結）。
@@ -58,7 +59,7 @@ locals {
     for k in keys(local.app_profile_models_jp) : k => "jp"
   }
 
-  # profile_ui に渡す per-user 作成対象。既存3モデル + 有効化された5系。
+  # profile_ui に渡す per-user 作成対象。既存国内3モデル + Opus 5.5 + 有効化されたglobalモデル。
   user_profile_models = merge(local.user_profile_models_jp, local.app_profile_models_global)
 }
 
