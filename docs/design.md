@@ -158,10 +158,12 @@ Bedrock では IAM で**技術的に強制**する（[infra/main.tf](../infra/ma
   - 管理者が随時コスト・監査を確認するコマンド集は [cost-admin-checks.md](cost-admin-checks.md) に集約
   - Azure 版 KQL 相当の「ユーザー別集計」は本番化で Model invocation logging（CloudWatch Logs/S3）を追加して実装
 - **週次利用状況レポート（実装）**: EventBridge Scheduler（月曜 09:30 JST）→ Lambda → Teams。
-  CloudWatch Metrics（`AWS/Bedrock`）でモデル別トークン消費量＋概算費用、Cost Explorer でタグ配賦の実コスト
-  （週次 + 月次累計・月次予算対比）を集計して投稿（[infra/usage_report.tf](../infra/usage_report.tf) /
-  [lambda/report_usage.py](../lambda/report_usage.py)）。トークン系は全呼出（Zed 組み込みモデル含む）を捕捉するが、
-  実コストはタグ配賦分のみ（Zed 組み込みモデルは抜ける = 既知の差）。⚠️ 実コスト取得にはコスト配分タグの有効化が前提
+  CloudWatch Metrics（`AWS/Bedrock`）でモデル別トークン消費量＋概算費用、Cost Explorer でタグ配賦の実コストと
+  利用者別内訳を、**期間中（直近7暦日）と今月累計（月初から）の両方**で集計して投稿
+  （[infra/usage_report.tf](../infra/usage_report.tf) / [lambda/report_usage.py](../lambda/report_usage.py)）。
+  日付窓はUTC暦日境界で共通化し、同じ期間同士を比較できる。トークン系は全呼出（Zed 組み込みモデル含む）を
+  捕捉するが、実コストはタグ配賦分のみ（Zed 組み込みモデルは抜ける = 既知の母集団差）。
+  ⚠️ 実コスト取得にはコスト配分タグの有効化が前提で、CEは最大24h遅延する
 
 ## 7. 本番化 TODO（PoC 通過後）
 

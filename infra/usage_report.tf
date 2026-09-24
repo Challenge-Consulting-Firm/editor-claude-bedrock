@@ -177,8 +177,9 @@ resource "aws_lambda_function" "report_usage" {
   handler          = "report_usage.handler"
   filename         = data.archive_file.lambda_zip.output_path
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
-  # メトリクス取得が 4 種 × モデル別 metric_ids（動的併合で増える）+ プロファイル列挙なので余裕を持つ
-  timeout = 120
+  # メトリクス取得は 4 種 × モデル別 metric_ids × 2期間（期間中/月次）。
+  # 動的併合で利用者が増えても余裕を持たせる。
+  timeout = 180
 
   environment {
     variables = {
