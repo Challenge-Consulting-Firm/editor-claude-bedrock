@@ -136,7 +136,9 @@ cp .env.sample .env        # .env は .gitignore 済み。値を実値に置き�
 - Prompt Caching（読み取り 0.1 倍）は Bedrock でも同単価で有効。エージェント用途では実効コストを大きく下げる
 - PoC 中の暴走防止として Budget（既定 $200/月、50/75/90% でメール通知）を Terraform で配備。
   **ハードストップ（Azure 版の disableLocalAuth 相当）は本番化スコープ**（[docs/design.md](docs/design.md) §7）
-- **週次レポート**: 毎週月曜 09:30 JST に Teams へトークン消費量（モデル別）+ 概算費用 + 実コスト（タグ配賦）を投稿
+- **週次レポート**: 毎週月曜 09:30 JST に Teams へ、モデル別トークン消費量・概算費用・実コストを
+  **期間中（直近7暦日）と今月累計（月初から）の両方**で投稿。利用者別コストも同じ2期間を並べ、
+  同じ期間同士で直接突き合わせできる
   （[infra/usage_report.tf](infra/usage_report.tf) / [lambda/report_usage.py](lambda/report_usage.py)）。
   実コスト集計には事前にコスト配分タグの有効化が必要（プロジェクト全体は `Project` / `Phase`、利用者別内訳は
   `user` / `app` / `model`、国内/global別は `residency`。`aws ce update-cost-allocation-tags-status ...`。詳細は [docs/design.md](docs/design.md) §6）
