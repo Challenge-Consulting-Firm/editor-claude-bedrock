@@ -83,13 +83,20 @@ Bedrock では IAM で**技術的に強制**する（[infra/main.tf](../infra/ma
    → us-east-1 等の bedrock-runtime へ回り込む迂回を封じる
 3. **任意**: `aws:SourceIp` による IP allowlist（`ALLOWED_IPS` 設定時。Azure 版 R2 相当）
 
-### 4.1 global プロファイル利用モデルの例外（国内完結を意図的に放棄する範囲・2026-09-16）
+### 4.1 global プロファイル利用モデルの例外 — ⚠️ **2026-09-24 に廃止済み**
 
-開発効率を優先し、**global allowlist 対象モデルに限りグローバルルーティングを許容**する
+> **現状**: `allow_global_models` の既定は **false**、allowlist は**空**。
+> Opus 5.5 が `jp.anthropic.claude-opus-5-5`（東京+大阪）で提供され、
+> 「国内完結 vs 最新モデル」のトレードオフが解消されたため、
+> 国外ルーティングを許容していた Opus 5 を廃止した（per-user プロファイル 6 件も削除）。
+> **現在は全モデルが国内完結**で、IAM に global 用 statement は生成されない。
+>
+> 以下は、将来再び `jp.` 未提供のモデルを使う必要が生じたときのために設計を残したもの。
+
+過去に開発効率を優先し、**global allowlist 対象モデルに限りグローバルルーティングを許容**していた
 （`allow_global_models = true`）。Opus 5 / Sonnet 5 は `jp.` プロファイルが無く、
-東京固定で使う手段もない（README「実測で分かった制約」#8）ため、「国内完結 vs 対象モデル」の二択になる。
-一方、**Opus 5.5 は `jp.anthropic.claude-opus-5-5` が提供された国内モデル**であり、
-この例外や `allow_global_models` の対象ではない。統制の穴を最小化するため次の設計とする:
+東京固定で使う手段もない（README「実測で分かった制約」#8）ため。
+再導入する場合は統制の穴を最小化するため次の設計を復活させる:
 
 - 許可する基盤モデルは **allowlist の明示列挙のみ**（`global_model_profile_ids`）。`global.*` のワイルドカードは使わない
   — 同じ接頭辞で `global.openai.*` / `global.xai.*` が東京に実在し、一括開放になるため
@@ -132,17 +139,15 @@ Bedrock では IAM で**技術的に強制**する（[infra/main.tf](../infra/ma
 ## 6. 監査・コスト
 
 - **residency 監査**: CloudTrail（Event history 90 日・追加設定不要）の `additionalEventData.inferenceRegion` と
-  アプリプロファイルのタグを突合する（`scripts/04`）。国内モデルは ap-northeast-1/3 のみ、
-  `model=opus-5` / `residency=global` のper-userプロファイルだけ国外処理を許容し、それ以外は違反
+  アプリプロファイルのタグを突合する（`scripts/04`）。**現在は全モデルが国内完結**のため、
+  ap-northeast-1/3 以外の処理はすべて違反・要確認として検知される
 - **利用量・コスト**: PoC は Budgets のソフト通知（50/75/90% 実績 + 100% 予測）+ **タグ配賦**。
   - 全リソースに共通タグ `Project=editor-claude-bedrock` / `Phase=poc` / `ManagedBy=terraform`（provider の default_tags）
   - **推論コストの配賦はタグ付きアプリケーション推論プロファイル経由**（[infra/inference-profiles.tf](../infra/inference-profiles.tf)。
     Bedrock のオンデマンド課金はリソース非依存のため、リソースタグだけでは配賦できない — これが AWS の公式解）。
-    Opus 4.8 / Sonnet 4.6 / Haiku 4.5 / **Opus 5.5（国内完結・2026-09-24 追加）** に加え、**Opus 5（global）** をper-userプロファイルとして配備。エディタ/CLIはポータルに表示された自分専用ARNを指定する。
-    実測（2026-09-16）: `global.` から複製したアプリ推論プロファイルでも invoke は成立し、
-    CloudWatch の `ModelId` にプロファイル ID が記録される = **棚卸しの仕組みは 4.x と同じまま 5 系にも効く**。
-    プロファイルには `residency` タグ（`jp` / `global`）も付与し、国内完結か否かで集計・絞り込みできるようにする。
-    Opus 5のシステムプロファイル直指定と共有プロファイルは許可せず、ユーザー別配賦を必須化する
+    Opus 4.8 / Sonnet 4.6 / Haiku 4.5 / **Opus 5.5（国内完結・2026-09-24 追加）** をper-userプロファイルとして配備。エディタ/CLIはポータルに表示された自分専用ARNを指定する。
+    プロファイルには `residency` タグ（現在は全件 `jp`）も付与し、国内完結か否かで集計・絞り込みできるようにする。
+    共有プロファイル経由の呼び出しは許可せず、ユーザー別配賦を必須化する
   - ⚠️ 制約: **Zed の組み込みモデル（エージェント用 Sonnet 4.6）はシステム jp. プロファイル直なのでタグ配賦されない**
     （Cost Explorer では「Bedrock 全体 −（タグ付き合計）」として把握）。Claude Code は ARN 指定でフル配賦可能
   - 初回のみ: 課金データにタグが現れた後（利用開始から最大 24h）、コスト配分タグを有効化する。

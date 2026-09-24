@@ -68,23 +68,29 @@ variable "openai_compat_region" {
 # 東京の foundation-model ARN からのアプリ推論プロファイル作成も不可
 # （ValidationException: does not support On Demand inference）。
 # よってこれらを東京リージョンに固定して使う手段は現時点で存在しない。
-# 一方、Opus 5.5 は jp.anthropic.claude-opus-5-5 が提供され、東京+大阪に閉じることを
-# 実測済み（2026-09-24）。国内モデルとして user_profile_models_jp で別管理する。
+#
+# 運用判断（2026-09-24）: **既定を false（= 国内完結のみ）に戻した**。
+# Opus 5.5 が jp.anthropic.claude-opus-5-5（東京+大阪）で提供され、
+# 「国内完結 vs 最新モデル」のトレードオフが解消されたため、
+# 国外ルーティングを許容する理由がなくなった（Opus 5 は廃止）。
+# 将来再び jp. 未提供の最新モデルを使う必要が生じたときだけ、
+# 明示的に true へ戻して allowlist を見直すこと。
 variable "allow_global_models" {
-  description = "global. システム推論プロファイルを使うモデルの利用を許可するか。true にすると allowlist 対象モデルの推論は国外（実測: eu-west-1 / us-east-1）で行われる。jp. 対応の Opus 5.5 は対象外"
+  description = "global. システム推論プロファイルを使うモデルの利用を許可するか。既定 false = 国内完結のみ。true にすると allowlist 対象モデルの推論は国外（実測: eu-west-1 / us-east-1）で行われる。jp. 対応の Opus 5.5 は対象外"
   type        = bool
-  default     = true
+  default     = false
 }
 
 # ⚠️ 意図的に「明示列挙」にしている。global.* のワイルドカード許可にすると
 # 同じ接頭辞の他ベンダーモデル（global.openai.* / global.xai.* 等・実測で東京に存在）まで
 # 一括開放され統制の穴になるため。モデルを増やすときは明示的に足すこと。
+#
+# 2026-09-24: Opus 5 の廃止に伴い空リストにした。allow_global_models と二重の安全弁になる
+# （フラグを誤って true に戻しても、allowlist が空なら global 経路は生成されない）。
 variable "global_model_profile_ids" {
-  description = "allow_global_models = true のときに許可する global. システム推論プロファイル ID の allowlist"
+  description = "allow_global_models = true のときに許可する global. システム推論プロファイル ID の allowlist。既定は空（Opus 5 廃止済み）"
   type        = list(string)
-  default = [
-    "global.anthropic.claude-opus-5",
-  ]
+  default     = []
 
   validation {
     condition = (

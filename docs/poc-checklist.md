@@ -238,6 +238,54 @@ Opus 5 全利用者展開後の定常状態を、デプロイ済みリソース�
 - `allow_global_models=false` の plan JSON も検証し、`opus-5` のglobal用IAM・ポータル・レポート定義だけが消え、
   `opus-5-5` は国内IAM・ポータル・レポートに残ることを確認した。
 
+## Opus 5（global）の廃止（2026-09-24）
+
+Opus 5.5 が国内完結で使えるようになったため、**国外ルーティングを許容していた Opus 5 を廃止**した。
+これにより、**全モデルが国内完結**の構成に戻った。
+
+### 廃止の判断材料（実測）
+
+| 確認項目 | 結果 |
+|---|---|
+| Opus 5 の過去30日利用量 | 計 **583 トークン**（内訳は全て展開時の検証呼び出し）= **実業務利用なし** |
+| Opus 5.5 の代替可能性 | ✅ 6 名全員が `opus-5-5` を保持し、実推論 6/6 成功 |
+
+### 実施内容
+
+| 層 | 変更 |
+|---|---|
+| Terraform | `allow_global_models` の既定を **false**、`global_model_profile_ids` を**空リスト**へ（二重の安全弁） |
+| IAM | `AllowInvokeUserTaggedGlobalAppProfiles` / `AllowFoundationModelForGlobalProfiles` の **2 statement が消失**。9→7 statement、**3052→2158 バイト** |
+| ポータル / レポート | `MODEL_SOURCES_JSON` ・`MODELS_JSON` から `opus-5` が消え、国内4モデルのみに |
+| per-user プロファイル | `cc-<user>-opus-5` **6 件を削除**（新規 `scripts/12-retire-model-profiles.sh`） |
+| 監査スクリプト | `04-check-cloudtrail.sh` の `GLOBAL_MODEL_TAGS` 既定を `opus-5` → **空**へ（国外処理を誤って「許可済み」分類しない） |
+
+⚠️ **IAM で塞ぐだけでは per-user プロファイルが残骸として残る**（Terraform 管理外のため）。
+廃止時は実体の削除までセットで行うこと。
+
+### 廃止後の検証
+
+| 確認項目 | 結果 |
+|---|---|
+| `terraform apply` | ✅ 0 added / **4 changed** / 0 destroyed |
+| IAM: Opus 5 の国外ルーティング | ✅ **`explicitDeny`** |
+| IAM: Opus 5 を東京で呼ぶ | ✅ **`implicitDeny`**（許可 statement 自体が消失） |
+| IAM: Opus 5.5 東京 / 大阪 | ✅ `allowed`（デグレなし） |
+| IAM: Opus 5.5 を国外で呼ぶ | ✅ `explicitDeny` |
+| プロファイル削除 | ✅ 6 件削除。`opus-5-5` は全件無傷（完全一致での選別） |
+| 残存モデル | ✅ haiku / opus / opus-5-5 / sonnet が各 6 名、**全件 `residency=jp`** |
+| Opus 5.5 実推論 | ✅ **6/6** 応答 `OK` |
+
+### probe.user / e2e.validation について
+
+利用者から問い合わせのあった 2 件は、**すでに不要・削除済み**だった。
+
+- アプリ推論プロファイル: **存在しない**（`app=claude-code` は実利用者 6 名のみ）
+- IAM ユーザー: **存在しない**（検証時の一時ユーザーは削除済み）
+- 週次レポートに出るのは **Cost Explorer の過去課金履歴**（いずれも **$0.00**）。
+  タグ別課金履歴は削除できない仕様で、集計期間がずれれば自然に消える。
+  **追加作業不要**。
+
 ## 付帯確認（判定には含めないが記録する）
 
 - [ ] キー発行の実測: `create-service-specific-credential` の `--credential-age-days` が期待どおり効くか（期限切れ後 401 になるか）

@@ -84,8 +84,10 @@ aws ce get-cost-and-usage \
 ## 4. モデル別コスト（想定外モデルの検知）
 
 サービス名 = モデル名なので、SERVICE ディメンションで金額のある行を並べるとモデル別内訳になる。
-**本構成の想定は国内モデル（Opus 4.8 / Sonnet 4.6 / Haiku 4.5 / Opus 5.5）+ Opus 5（global）**。Sonnet 5など未許可モデルが出た場合や、Opus 5の金額が
-per-userタグ集計と対応しない場合は、別プロジェクト由来または統制外利用を切り分ける。
+**本構成の想定は国内モデルのみ（Opus 4.8 / Sonnet 4.6 / Haiku 4.5 / Opus 5.5）**。
+Opus 5（global）は 2026-09-24 に廃止済みなので、**新規の Opus 5 課金が出たら異常**。
+Sonnet 5 など未許可モデルが出た場合も含め、別プロジェクト由来か統制外利用かを切り分ける。
+（廃止前の Opus 5 課金は履歴として残るため、過去期間の集計には引き続き現れる）
 
 ```bash
 aws ce get-cost-and-usage \
@@ -115,8 +117,8 @@ aws bedrock list-tags-for-resource --region ap-northeast-1 \
   --query 'tags' --output table
 ```
 
-各 per-user プロファイルに `user=<氏名>` / `app=claude-code` / `model=opus|sonnet|haiku|opus-5` が揃っていること。
-新規作成分は `residency=jp|global` も確認する。特に Opus 5 は `model=opus-5` / `residency=global` がIAM許可の必須条件。
+各 per-user プロファイルに `user=<氏名>` / `app=claude-code` / `model=opus|sonnet|haiku|opus-5-5` が揃っていること。
+新規作成分は `residency=jp` も確認する（Opus 5 廃止後は全件 `jp`。`global` が出たら残骸を疑う）。
 
 > 💡 **コスト削減の確認ポイント**: 利用者がサブエージェントを Haiku に固定しているかは、
 > 下記「4. モデル別コスト」で Haiku の比率が上がっているかで見る。設定手順は
@@ -133,8 +135,8 @@ aws bedrock list-tags-for-resource --region ap-northeast-1 \
 `scripts/04-check-cloudtrail.sh` で次の3分類を確認する。
 
 - `国内`: ap-northeast-1/3（国内モデルの正常系。Opus 5.5 もここに入る）
-- `global許可`: `user` / `app=claude-code` / `model` / `residency=global` が揃ったper-userプロファイルによる国外処理
-- `違反`: 上記per-userプロファイル以外による国外処理
+- `global許可`: `GLOBAL_MODEL_TAGS` で明示した allowlist モデルのみ（**現在は空 = Opus 5 廃止済み**）
+- `違反`: 上記以外の国外処理。全モデル国内完結の現状では、国外処理はすべてここに入る
 
 ```bash
 # 直近イベントの概要（処理先と許可/違反の詳細判定は次のスクリプトで行う）
@@ -145,7 +147,8 @@ aws cloudtrail lookup-events \
 ```
 
 `inferenceRegion` とモデルプロファイルのタグを突合するには `scripts/04-check-cloudtrail.sh` を使う
-（CloudTrail は最大数分の記録遅延あり）。Opus 5 の国外処理は、タグ付きper-userプロファイル経由なら意図した例外として表示される。
+（CloudTrail は最大数分の記録遅延あり）。**Opus 5 廃止後は国外処理自体が想定外**なので、
+検出されたらタグ不備・残骸プロファイル・統制外利用のいずれかを切り分ける。
 
 ---
 

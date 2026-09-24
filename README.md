@@ -2,8 +2,8 @@
 
 姉妹リポジトリ editor-openai-foundry（社内・非公開）（Azure 版・稼働中）で
 **実測の結果諦めた「推論の国内完結」**を、AWS Bedrock の **日本国内クロスリージョン推論プロファイル（`jp.` プロファイル）** で
-取り戻せるかを実測した PoC。国内モデルに加え、開発効率を優先する選択肢として **Claude Opus 5（global）**を
-ユーザー別棚卸し付きで限定許可するハイブリッド構成へ拡張している。
+取り戻せるかを実測した PoC。**現在は全モデルが国内完結**（Opus 4.8 / Sonnet 4.6 / Haiku 4.5 / Opus 5.5）。
+一時的に許可していた Opus 5（global）は、Opus 5.5 の国内提供により **2026-09-24 に廃止**した。
 
 > Azure 版の教訓（公式提供表と実環境の乖離を 4 回踏んだ）に従い、本 PoC も
 > **「書類上できるはず」を一切信用せず、全て実測で白黒つける**方針。判定は [docs/poc-checklist.md](docs/poc-checklist.md) に記録する。
@@ -23,11 +23,11 @@
 
 | 軸 | Azure（稼働中） | Bedrock（本 PoC） |
 |---|---|---|
-| 国内完結 | ❌ 実測で不可（DataZone/APAC 止まり） | 国内モデル（Opus 5.5 含む）は ✅ 東京+大阪限定。Opus 5選択時のみ ⚠️ global処理 |
-| 迂回防止 | deployment 名の運用規約のみ | 国内は `jp.`、Opus 5は user/residencyタグ付きper-userプロファイルだけをIAM許可 | |
+| 国内完結 | ❌ 実測で不可（DataZone/APAC 止まり） | ✅ **全モデルが東京+大阪限定**（Opus 5.5 含む） |
+| 迂回防止 | deployment 名の運用規約のみ | `jp.` プロファイルと user タグ付きper-userプロファイルだけをIAM許可。国外は明示Deny |
 | 監査 | KQL（利用量） | **CloudTrail の `inferenceRegion` で実処理リージョンを事後監査** |
 | エディタからキー利用 | ✅ 実証済み（api-key） | △ **要実測**: OpenAI 互換エンドポイント + Bedrock API キー（Bearer） |
-| モデル | gpt-5.2（APAC） | Claude Opus 4.8 / Sonnet 4.6 / Haiku 4.5 / **Opus 5.5**（いずれも国内）、Opus 5（global） |
+| モデル | gpt-5.2（APAC） | Claude Opus 4.8 / Sonnet 4.6 / Haiku 4.5 / **Opus 5.5**（すべて国内完結） |
 
 ## 実測で分かった制約（ap-northeast-1/3・2026-07-14）
 
@@ -61,9 +61,9 @@
      （`global.` プロファイルの models[] にリージョン無し ARN が含まれるのが全世界ルーティングの実体）。
    **Opus 5.5 は例外**: 2026-09-24 に `jp.anthropic.claude-opus-5-5` の ACTIVE と
    推論先が東京+大阪だけであることを実測し、国内モデルとして追加済み。
-   **運用判断（2026-09-16）**: `jp.` 未提供の Opus 5 は、開発効率を優先してグローバル前提で許可する。
-   国内完結が要る作業は国内モデル（**Opus 5.5** / Opus 4.8 / Sonnet 4.6 / Haiku 4.5）を使う。ポータルに `国外処理` バッジを表示して区別する。
-   Opus 5 は user/residency タグ付きper-userアプリ推論プロファイル経由だけを許可し、システム `global.` 直指定は拒否する
+   **運用判断（2026-09-24 更新）**: Opus 5.5 が国内で使えるようになったため、
+   国外ルーティングを許容していた **Opus 5 は廃止**した（`allow_global_models` 既定 false、
+   allowlist 空、per-user プロファイル 6 件も削除済み）。現在は全モデルが国内完結。
 9. **Anthropic の use case フォーム提出（Model access の初回手続き）は必須**だが、執行が API で不整合:
    **Converse は未提出でも通る / InvokeModel は 404 で拒否**。`get-foundation-model-availability` が
    AUTHORIZED を返しても手続き完了を意味しない。Claude Code は InvokeModel を使うためここで止まる

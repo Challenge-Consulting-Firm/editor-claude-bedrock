@@ -25,8 +25,10 @@ export TF_VAR_ops_email="$OPS_EMAIL"
 export TF_VAR_teams_webhook_url="$TEAMS_WEBHOOK_URL"
 export TF_VAR_entra_tenant_id="$ENTRA_TENANT_ID"
 export TF_VAR_entra_client_id="$ENTRA_CLIENT_ID"
-# 任意: Opus 5（global. プロファイル）の許可。⚠️ 当該モデルの推論は国内完結しない
-# （実測: Opus 5 -> eu-west-1）。.env の ALLOW_GLOBAL_MODELS=false で無効化できる
+# 任意: global. プロファイルを使うモデルの許可。**既定は false（国内完結のみ）**。
+# Opus 5.5 の国内提供により Opus 5（global）は 2026-09-24 に廃止した。
+# ⚠️ true に戻すと当該モデルの推論は国内完結しない（実測: Opus 5 -> eu-west-1）。
+# 再導入する場合は allowlist（global_model_profile_ids）への明示追加も必要。
 if [[ -n "${ALLOW_GLOBAL_MODELS:-}" ]]; then
   export TF_VAR_allow_global_models="$ALLOW_GLOBAL_MODELS"
 fi
