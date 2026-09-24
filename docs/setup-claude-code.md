@@ -325,9 +325,11 @@ claude -p "「国内完結OK」とだけ返答してください"
 
 ## 4. 運用メモ
 
-- 監査: 成功呼び出しは CloudTrail の `inferenceRegion` で確認する。国内モデルは ap-northeast-1/3、
-  Opus 5 は `residency=global` タグ付きper-userプロファイルに限り国外処理を許容。`scripts/04-check-cloudtrail.sh` が両者を分類する
-- 迂回防止: Opus 5 の `global.` システムプロファイル直指定は拒否される。必ず利用者ポータルの `opus-5` ARN を使う
+- 監査: 成功呼び出しは CloudTrail の `inferenceRegion` で確認する。**全モデルが国内完結**のため
+  ap-northeast-1/3 以外はすべて異常。`scripts/04-check-cloudtrail.sh` が国内/違反/要確認を分類する
+- 迂回防止: `jp.` システムプロファイル直指定でも呼べるが、共有キー運用では利用者別の棚卸しを
+  迂回するため使わない。必ず利用者ポータルの自分専用 ARN（`opus` / `sonnet` / `haiku` / `opus-5-5`）を使う。
+  廃止済みの `opus-5` ARN は削除済みで、IAM でも拒否される
 
 ## 5. Windows での差分（未実測）
 
