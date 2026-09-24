@@ -83,6 +83,19 @@ locals {
       in_price  = 1.1 # $1.00 × 1.1（実測 2026-09-03）
       out_price = 5.5 # $5.00 × 1.1
     },
+    {
+      # Opus 5.5（国内完結）。jp. プロファイルが提供されたため国内モデルとして集計する。
+      # metric_ids は jp. システムプロファイル直呼び（Zed 組み込み等）の分。
+      # per-user の cc-<user>-opus-5-5 は Lambda が model タグから動的発見して併合する。
+      # 共有プロファイル（editor-claude-*-jp）は新規作成しないためここには含めない。
+      # 単価は未検証のため null =「単価未設定」表示にし、トークン数だけを集計する
+      # （推定単価で概算に誤差を持ち込まない方針。実額は Cost Explorer 側で正確に出る）。
+      name       = "Opus 5.5"
+      model_tag  = "opus-5-5"
+      metric_ids = ["jp.anthropic.claude-opus-5-5"]
+      in_price   = null
+      out_price  = null
+    },
   ]
 
   # Opus 5（global.）のレポート定義。allow_global_models = false なら空リスト。

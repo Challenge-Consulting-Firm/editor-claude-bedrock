@@ -1,7 +1,7 @@
 # Claude Code セットアップ（検証 3 実測済み・2026-07-14）
 
-Claude Code CLI から Bedrock の **国内3モデル（`jp.`）と Opus 5（`global.`）**を Bearer API キーで使う手順。
-国内3モデルのエンドツーエンド動作は実測済み。Opus 5 はユーザー別アプリ推論プロファイル経由でのみ許可する。
+Claude Code CLI から Bedrock の **国内4モデル（`jp.`）と Opus 5（`global.`）**を Bearer API キーで使う手順。
+国内モデルのエンドツーエンド動作は実測済み。Opus 5 はユーザー別アプリ推論プロファイル経由でのみ許可する。
 
 ## 0. 前提（運用者側で完了済みであること）
 
@@ -16,12 +16,12 @@ Claude Code CLI から Bedrock の **国内3モデル（`jp.`）と Opus 5（`gl
 Bedrock のオンデマンド推論はリソース非依存の課金のため、**誰がいくら使ったか**を割り出すには
 利用者ごとにタグ付きアプリケーション推論プロファイルを作り、各自にその ARN を使わせる。
 API キーは共有のままでよい（課金は「呼び出したプロファイル」に付いた `user` タグで集計される）。
-プロファイル自体は無償。国内3モデルは jp. の推論先（東京+大阪）と +10% プレミアムを継承し、
+プロファイル自体は無償。国内モデルは jp. の推論先（東京+大阪）と +10% プレミアムを継承し、
 Opus 5 は global ルーティングを継承する。いずれもユーザー別の `user` タグで棚卸しする。
 
-利用者 1 名につき **Opus 4.8（国内）＋ Sonnet 4.6（国内）＋ Haiku 4.5（国内）＋ Opus 5（global）の4本**を
-ポータルから作成する。既存利用者は再度「作成」を押すと、不足している Opus 5 だけが追加される。
-以下のCLI例は国内3モデルを手動作成する旧手順であり、Opus 5 はポータル利用を推奨する。
+利用者 1 名につき **Opus 4.8（国内）＋ Sonnet 4.6（国内）＋ Haiku 4.5（国内）＋ Opus 5.5（国内）＋ Opus 5（global）の5本**を
+ポータルから作成する。既存利用者は再度「作成」を押すと、不足しているモデルだけが追加される。
+以下のCLI例は国内モデルを手動作成する旧手順であり、現在はポータル利用を推奨する。
 
 ```bash
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
@@ -92,7 +92,7 @@ foreach ($U in $users) {
 > スペース区切りで並べる（bash と同一）。
 </details>
 
-- **タグ**: `user`（集計軸）/ `app=claude-code`（他用途と分離）/ `model`（`opus` / `sonnet` / `haiku` / `opus-5`）/
+- **タグ**: `user`（集計軸）/ `app=claude-code`（他用途と分離）/ `model`（`opus` / `sonnet` / `haiku` / `opus-5-5` / `opus-5`）/
   `residency`（新規作成分は `jp` / `global`）。Opus 5 は4タグすべてが揃ったper-userプロファイルだけIAMで呼び出し可能
 - **`--description` は付けない**: ASCII の一部記号（括弧など）で ValidationException になる。不要なら省略が安全
 - 作成済み一覧: `aws bedrock list-inference-profiles --region ap-northeast-1 --type-equals APPLICATION`
@@ -118,11 +118,29 @@ foreach ($U in $users) {
 - **冪等**: 既存プロファイルはスキップし、不足分だけ作る。`residency` タグが無い旧プロファイルには補完する
 - 対象利用者は既存の `app=claude-code` プロファイルから自動検出する（上記 6 名と一致）
 - 実績: 2026-09-16 に本スクリプトで **Opus 5 を全 6 名に展開**（5 件新規作成・1 名は既存のため変更なし）
+- 実績: 2026-09-24 に **Opus 5.5（国内完結）を全 6 名に展開**（6 件新規作成。既存 4 モデルは再作成なし）
 
-> ### Claude 5 系の制約と Opus 5 の運用 — ⚠️ 国内完結ではない
+> ### Opus 5.5 は国内完結で使える（✅ 2026-09-24 実測）
 >
-> 5 系は **`jp.`（国内完結）プロファイルが未提供**で、東京リージョンに固定して使う手段も存在しない。
-> 実測（2026-09-16）で確認した制約:
+> **`jp.anthropic.claude-opus-5-5` が提供された**ため、Opus 5.5 は国内完結モデルとして扱う。
+> 実測で確認した内容:
+>
+> - `jp.anthropic.claude-opus-5-5` は **ACTIVE**。`models[]` は
+>   `ap-northeast-1` / `ap-northeast-3` の foundation-model のみ = **推論先が国内に閉じる**
+> - jp. システムプロファイル直呼び・jp. 由来の per-user アプリ推論プロファイル経由とも **Converse 成功**
+> - CloudTrail の `inferenceRegion` は **`ap-northeast-1`**（国内判定）
+> - 国外リージョンからの呼び出しは IAM の明示 Deny で遮断（`explicitDeny` を実測）
+>
+> したがって Opus 5.5 は `residency=jp` タグで作成され、ポータルでも
+> <code>国外処理</code> バッジは付かない。**機密度の高い作業でも使える**。
+>
+> ⚠️ `model` タグは `opus-5-5` で、global の `opus-5` とは**別モデル扱い**。
+> 同一視すると `residency` が jp / global で衝突し、棚卸しと IAM 条件の双方が壊れる。
+
+> ### Claude 5 系の制約と Opus 5 の運用 — ⚠️ こちらは国内完結ではない
+>
+> **Opus 5（`opus-5`）に限った話**。`jp.`（国内完結）プロファイルが未提供で、
+> 東京リージョンに固定して使う手段も存在しない。実測（2026-09-16）で確認した制約:
 >
 > - `jp.anthropic.claude-opus-5` は**存在しない**（`The provided model identifier is invalid`）
 > - 素のモデル ID `anthropic.claude-opus-5` は **on-demand 非対応**
@@ -134,14 +152,17 @@ foreach ($U in $users) {
 >   **Opus 5 → `eu-west-1`（アイルランド）/ Sonnet 5 → `us-east-1`（バージニア）**
 >
 > **判断（2026-09-16）**: 開発効率を優先し、Opus 5 は**グローバル利用を前提に許可**する。
-> ただし国内完結が要る作業（社内コード・顧客データを含むもの）では **Opus 4.8 / Sonnet 4.6 / Haiku 4.5** を使うこと。
+> ただし国内完結が要る作業（社内コード・顧客データを含むもの）では
+> **Opus 5.5 / Opus 4.8 / Sonnet 4.6 / Haiku 4.5** を使うこと。
 > ポータル上では Opus 5 に <code>国外処理</code> バッジが出るので、それを目印に選び分ける。
 >
-> 統制面では `allow_global_models = false`（Terraform 変数）で Opus 5 を IAM ごと塞げる。
+> 統制面では `allow_global_models = false`（Terraform 変数）で Opus 5 を IAM ごと塞げる
+> （Opus 5.5 は国内モデルなのでこのフラグの影響を受けず、引き続き利用できる）。
 > 許可対象の基盤モデルはallowlistで明示列挙し、システム `global.` の直指定は許可しない。
 > （同じ接頭辞の `global.openai.*` / `global.xai.*` 等を巻き込まないため）。
 > Opus 5 は利用者ポータルに表示された `user` タグ付きARNからのみ利用できる。
-> jp. 版 Opus 5 が提供されたらコピー元を差し替えて国内完結に戻せる。
+> jp. 版 Opus 5 が提供されたらコピー元を差し替えて国内完結に戻せる
+> （Opus 5.5 はまさにこのパターンで 2026-09-24 に国内化した）。
 
 ## 1. 利用者の設定
 

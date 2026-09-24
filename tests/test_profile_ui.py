@@ -19,6 +19,7 @@ os.environ.setdefault(
             "opus": "jp.anthropic.claude-opus-4-8",
             "sonnet": "jp.anthropic.claude-sonnet-4-6",
             "haiku": "jp.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "opus-5-5": "jp.anthropic.claude-opus-5-5",
             "opus-5": "global.anthropic.claude-opus-5",
         }
     ),
@@ -103,13 +104,55 @@ class ProfileUiTests(unittest.TestCase):
         with patch.object(profile_ui, "bedrock", fake):
             profile_ui.create_user_profiles("user.name")
 
-        self.assertEqual(
-            [c["tags"][2]["value"] for c in fake.created],
-            ["opus-5"],
+        # 既存の国内3モデルは再作成されず、未保持の 5 系だけが追加される（冪等・バックフィル）。
+        created = {c["tags"][2]["value"]: c for c in fake.created}
+        self.assertEqual(sorted(created), ["opus-5", "opus-5-5"])
+
+        # residency はコピー元プロファイルの接頭辞で決まる:
+        #   Opus 5.5 = jp.（国内完結）/ Opus 5 = global.（国外処理）
+        residency = {
+            model: next(t["value"] for t in c["tags"] if t["key"] == "residency")
+            for model, c in created.items()
+        }
+        self.assertEqual(residency, {"opus-5-5": "jp", "opus-5": "global"})
+
+        # コピー元は model ごとのシステムプロファイル ARN（取り違えると別モデルを複製してしまう）
+        self.assertTrue(
+            created["opus-5-5"]["modelSource"]["copyFrom"].endswith(
+                "inference-profile/jp.anthropic.claude-opus-5-5"
+            )
         )
-        self.assertTrue(all(c["tags"][3]["value"] == "global" for c in fake.created))
+        self.assertTrue(
+            created["opus-5"]["modelSource"]["copyFrom"].endswith(
+                "inference-profile/global.anthropic.claude-opus-5"
+            )
+        )
+
+        # residency タグ未付与の既存国内3モデルには jp を補完する
         self.assertEqual(len(fake.tagged), 3)
         self.assertTrue(all(t["tags"] == [{"key": "residency", "value": "jp"}] for t in fake.tagged))
+
+    def test_opus_5_5_is_treated_as_japan_resident(self):
+        """Opus 5.5 は jp. プロファイル由来なので国内完結扱い。opus-5（global）と混同しないこと。"""
+        self.assertTrue(profile_ui.is_japan_resident("opus-5-5"))
+        self.assertFalse(profile_ui.is_japan_resident("opus-5"))
+        # 未定義モデルは安全側（国内完結と見なさない）
+        self.assertFalse(profile_ui.is_japan_resident("unknown-model"))
+
+    def test_existing_opus_5_5_is_not_recreated(self):
+        """既に opus-5-5 を持つ利用者に再実行しても重複作成しない（冪等性）。"""
+        profiles = [summary("p1", "cc-user-opus-5-5")]
+        fake = FakeBedrock(
+            profiles,
+            {profiles[0]["inferenceProfileArn"]: tags("user.name", "opus-5-5", "jp")},
+        )
+        with patch.object(profile_ui, "bedrock", fake):
+            profile_ui.create_user_profiles("user.name")
+
+        created_models = [c["tags"][2]["value"] for c in fake.created]
+        self.assertNotIn("opus-5-5", created_models)
+        # residency が正しく付いている既存分は再タグ付けしない
+        self.assertEqual(fake.tagged, [])
 
     def test_long_and_symbol_heavy_user_names_generate_valid_unique_names(self):
         first = profile_ui._profile_name("_" * 64, "opus-5", set())

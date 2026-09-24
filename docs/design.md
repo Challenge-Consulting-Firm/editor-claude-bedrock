@@ -136,7 +136,7 @@ Bedrock では IAM で**技術的に強制**する（[infra/main.tf](../infra/ma
   - 全リソースに共通タグ `Project=editor-claude-bedrock` / `Phase=poc` / `ManagedBy=terraform`（provider の default_tags）
   - **推論コストの配賦はタグ付きアプリケーション推論プロファイル経由**（[infra/inference-profiles.tf](../infra/inference-profiles.tf)。
     Bedrock のオンデマンド課金はリソース非依存のため、リソースタグだけでは配賦できない — これが AWS の公式解）。
-    Opus 4.8 / Sonnet 4.6 / Haiku 4.5 に加え、**Opus 5（global）** をper-userプロファイルとして配備。エディタ/CLIはポータルに表示された自分専用ARNを指定する。
+    Opus 4.8 / Sonnet 4.6 / Haiku 4.5 / **Opus 5.5（国内完結・2026-09-24 追加）** に加え、**Opus 5（global）** をper-userプロファイルとして配備。エディタ/CLIはポータルに表示された自分専用ARNを指定する。
     実測（2026-09-16）: `global.` から複製したアプリ推論プロファイルでも invoke は成立し、
     CloudWatch の `ModelId` にプロファイル ID が記録される = **棚卸しの仕組みは 4.x と同じまま 5 系にも効く**。
     プロファイルには `residency` タグ（`jp` / `global`）も付与し、国内完結か否かで集計・絞り込みできるようにする。

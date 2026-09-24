@@ -1,12 +1,12 @@
 """利用者プロファイル管理 Web UI（Lambda Function URL・EntraID 認証）。
 
 「ユーザプロファイル」= 利用者ごとのコスト配賦用アプリケーション推論プロファイル
-（`cc-<user>-opus` / `-sonnet` / `-haiku` / `-opus-5`。タグ user / app=claude-code / model / residency 付き）。
+（`cc-<user>-opus` / `-sonnet` / `-haiku` / `-opus-5-5`。タグ user / app=claude-code / model / residency 付き）。
 従来 docs/setup-claude-code.md §0.5 の AWS CLI 手動作成だったものを Web UI 化する。
 
 ⚠️ 国内完結の可否はモデルで異なる（residency タグ）:
-  jp     = 推論も国内（東京+大阪）で完結。Opus 4.8 / Sonnet 4.6 / Haiku 4.5
-  global = 推論が国外へ出る。Claude 5 系（jp. プロファイル未提供のため）
+  jp     = 推論も国内（東京+大阪）で完結。Opus 4.8 / Sonnet 4.6 / Haiku 4.5 / Opus 5.5
+  global = 推論が国外へ出る。jp. プロファイル未提供の Claude 5 系（Opus 5 等）
 
 構成（design.md の流儀に合わせ最小構成）:
   - Lambda Function URL（authtype=NONE）1 本で HTML(SPA) と JSON API の両方を配信
@@ -61,14 +61,17 @@ USER_APP_TAG_VALUE = APP_TAG_VALUE
 # ⚠️ 国内完結の可否がモデルで異なる:
 #   jp.*     = 推論も国内（東京+大阪）で完結
 #   global.* = 推論が国外に出る（実測 2026-09-16: opus-5 -> eu-west-1）
-# 5 系に jp. プロファイルは存在せず、東京固定で使う手段もないため、
+# Opus 5（global）に jp. プロファイルは存在せず、東京固定で使う手段もないため、
 # 「開発効率を取るか国内完結を取るか」の選択を利用者に明示するため UI にバッジ表示する。
+# 一方 Opus 5.5 は jp. プロファイルが提供されたため国内完結モデルとして扱う
+# （実測 2026-09-24: jp.anthropic.claude-opus-5-5 の推論先は東京+大阪のみ）。
 #
 # 環境変数 MODEL_SOURCES_JSON で上書き可（Terraform から注入して定義を一元化するため）。
 _DEFAULT_MODEL_SOURCES = {
     "opus": "jp.anthropic.claude-opus-4-8",
     "sonnet": "jp.anthropic.claude-sonnet-4-6",
     "haiku": "jp.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "opus-5-5": "jp.anthropic.claude-opus-5-5",
 }
 
 
@@ -768,9 +771,11 @@ INDEX_HTML = """<!DOCTYPE html>
 <div class="wrap">
 <p class="lead">利用者ごとのコスト配賦用アプリケーション推論プロファイル（<code>cc-&lt;user&gt;-&lt;model&gt;</code>）を管理します。
 作成すると、環境で有効なモデルが <code>user</code> / <code>app=claude-code</code> / <code>model</code> / <code>residency</code>
-タグ付きで作られます。Opus 5を有効化している環境では <span class="tag global">国外処理</span> と表示されます。</p>
-<p class="lead" style="font-size:.82rem;color:var(--text-tertiary)">※ Opus 5は国内完結（jp. プロファイル）が未提供のため、
-推論が日本国外で実行されます（実測: Opus 5 → アイルランド）。機密度の高いコードには国内完結モデルを選んでください。</p>
+タグ付きで作られます。推論が国外で実行されるモデルには <span class="tag global">国外処理</span> と表示されます。</p>
+<p class="lead" style="font-size:.82rem;color:var(--text-tertiary)">※ Opus 4.8 / Sonnet 4.6 / Haiku 4.5 / Opus 5.5 は
+<code>jp.</code> プロファイル経由で推論も国内（東京+大阪）で完結します。
+<code>jp.</code> が未提供のモデル（Opus 5 等）を有効化している環境では、そのモデルのみ推論が日本国外で実行されます
+（実測: Opus 5 → アイルランド）。機密度の高いコードには国内完結モデルを選んでください。</p>
 
 <!-- #msg は signin/app どちらの画面でも見えるよう外に置く（初期化・サインイン失敗も表示するため） -->
 <div id="msg"></div>
@@ -1014,6 +1019,14 @@ function fmtDate(iso) {
 let costRange = "monthly";
 let weeklyData = null;
 let weekIndex = 0;
+// モデル別の residency（{model: "jp"|"global"}）。/api/profiles の modelMeta を保持し、
+// コスト内訳の「国外処理」表示に使う。モデル名のハードコードを避けるため
+// （opus-5 決め打ちだと Opus 5.5 のような国内モデルまで誤って国外色になる）。
+let modelResidency = {};
+
+function isGlobalModel(model) {
+  return modelResidency[model] === "global";
+}
 
 function switchCostTab(range) {
   if (costRange === range) return;
@@ -1030,7 +1043,7 @@ function renderCostTable(data, cur) {
 if (data.users && data.users.length) {
     for (const u of data.users) {
       const models = (u.models || []).map((m) =>
-        '<span class="model-cost' + (m.model === "opus-5" ? " global" : "") + '">' +
+        '<span class="model-cost' + (isGlobalModel(m.model) ? " global" : "") + '">' +
         esc(m.model) + ": " + esc(money(m.amount)) + "</span>"
       ).join(" ");
       html += "<tr><td><strong>" + esc(u.user) + "</strong>" +
@@ -1109,7 +1122,13 @@ async function loadProfiles() {
   const rows = document.getElementById("rows");
   rows.innerHTML = '<tr><td colspan="3" class="muted">読み込み中…</td></tr>';
   try {
-    const { profiles } = await api("GET");
+    const { profiles, modelMeta } = await api("GET");
+    // コスト内訳の国外処理バッジ判定に使うため residency を控える
+    if (modelMeta) {
+      modelResidency = Object.fromEntries(
+        Object.entries(modelMeta).map(([m, meta]) => [m, meta.residency])
+      );
+    }
     const users = Object.keys(profiles).sort();
     if (!users.length) {
       rows.innerHTML = '<tr><td colspan="3" class="muted">プロファイルはまだありません</td></tr>';
