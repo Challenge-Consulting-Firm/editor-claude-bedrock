@@ -181,6 +181,58 @@ Opus 5 全利用者展開後の定常状態を、デプロイ済みリソース�
 > サービス固有認証情報自体は 2 本とも Active）。**インフラ側の障害ではない**ため、
 > 上記の実推論は運用者の SigV4 で実施した。利用者は次回ポータルでキーを貼り替えれば復旧する。
 
+## Opus 5.5 の国内完結対応（2026-09-24）
+
+**`jp.anthropic.claude-opus-5-5` が提供された**ため、Opus 5.5 を**国内完結モデル**として追加した。
+これまでの「5 系は jp. 未提供 = 国内完結不可」という前提は **Opus 5.5 に限って覚された**
+（Opus 5 は引き続き global のみ）。
+
+### 前提の実測
+
+| 確認項目 | 結果 |
+|---|---|
+| `jp.anthropic.claude-opus-5-5` の存在 | ✅ **ACTIVE**（`JP Anthropic Claude Opus 5.5`、作成 2026-09-22） |
+| 推論先リージョン（`models[]`） | ✅ `ap-northeast-1` / `ap-northeast-3` のみ = **国内に閉じる** |
+| 基盤モデル `anthropic.claude-opus-5-5` | `INFERENCE_PROFILE` のみ（モデル直叩き不可）、`ACTIVE` / `AUTHORIZED` |
+| jp. システムプロファイル直呼び | ✅ Converse 成功（応答 `OK`）。Zed 組み込み等の経路も利用可 |
+| jp. 由来の per-user アプリ推論プロファイル | ✅ 作成でき、Converse も成功（検証用は削除済み） |
+
+この結果から、Opus 5.5 は global 扱いではなく `user_profile_models_jp`（国内モデル群）へ
+追加するのが正しい設計と判断した。`allow_global_models` の影響を受けない（= 同フラグを
+`false` にしても Opus 5.5 は使える）。
+
+### デプロイ実績
+
+| 確認項目 | 結果 |
+|---|---|
+| `terraform apply` | ✅ 0 added / **4 changed** / 0 destroyed（IAM 管理ポリシー + Lambda 3 本） |
+| IAM ポリシーサイズ | ✅ **3052 / 6144 バイト**（余裕 3092。statement 数は 9 のまま） |
+| タグ条件への反映 | ✅ `AllowInvokeUserTaggedJpAppProfiles` / `DenyJpAppProfilesOutsideJpRegions` の両方に `opus-5-5` が入る |
+| global 側への混入なし | ✅ `AllowInvokeUserTaggedGlobalAppProfiles` は `opus-5` のまま（分離されている） |
+| 全利用者への展開 | ✅ `11-sync-user-profiles.sh` で **6 名に 6 件新規作成**。既存 4 モデルは再作成なし（冪等） |
+| タグ整合 | ✅ 6 名とも `user` / `app=claude-code` / `model=opus-5-5` / **`residency=jp`** |
+| 実推論（6 名分の per-user ARN | ✅ **6/6** 応答 `OK` |
+| CloudTrail 監査 | ✅ `inferenceRegion=ap-northeast-1`（**国内**判定）。未許可の国外処理なし |
+
+### IAM ガードレール（simulate-principal-policy 実測）
+
+| ケース | 結果 |
+|---|---|
+| `opus-5-5` per-user、3タグ揃い / 東京 | ✅ `allowed` |
+| `opus-5-5` per-user / 大阪ルーティング | ✅ `allowed`（jp. が大阪へ振る経路を塞がない） |
+| `opus-5-5` だが**国外リージョン**（迲回） | ✅ **`explicitDeny`**（明示 Deny で遮断） |
+| `opus-5-5` で `user` タグが空（未配賦） | ✅ `implicitDeny` |
+
+### 実装上の注意点
+
+- **`model` タグは `opus-5-5`**。global の `opus-5` と同一値にすると `residency` が
+  jp / global で衝突し、棚卸しと IAM 条件の双方が壊れる。
+- 週次レポートの単価は **`null`（単価未設定）**。トークン数のみ集計し、実額は
+  Cost Explorer 側で見る（推定単価で概算に誤差を持ち込まない既存方針を踏襲）。
+  jp. の +10% プレミアムが乗るため、単価確定時は 4.x と同じ逆算手法を使うこと。
+- ポータル UI のコスト内訳バッジが `m.model === "opus-5"` の**ハードコード**だったため、
+  `modelMeta.residency` 参照へ修正した（放置すると Opus 5.5 が誤って「国外処理」表示になる）。
+
 ## 付帯確認（判定には含めないが記録する）
 
 - [ ] キー発行の実測: `create-service-specific-credential` の `--credential-age-days` が期待どおり効くか（期限切れ後 401 になるか）

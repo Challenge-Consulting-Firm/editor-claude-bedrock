@@ -1,6 +1,6 @@
 # VS Code セットアップ（検証 3・2026-07-14 時点）
 
-VS Code から Bedrock の国内3モデル（`jp.`）またはユーザー別 Opus 5（global）を使う経路の整理。
+VS Code から Bedrock の国内モデル（`jp.`。Opus 5.5 を含む）またはユーザー別 Opus 5（global）を使う経路の整理。
 
 | 方法 | 判定 |
 |---|---|

@@ -6,7 +6,7 @@
 **表示・作成・削除**するための管理 UI。従来 [setup-claude-code.md](setup-claude-code.md) §0.5 の
 AWS CLI 手動作成だった運用を置き換える（列挙・タグ規約は [lambda/rotate_key.py](../lambda/rotate_key.py) と同一）。
 
-**利用者向けの単一ハブ**でもある: 現行 Bedrock API キー・自分のモデル ARN（国内3モデル + Opus 5）・
+**利用者向けの単一ハブ**でもある: 現行 Bedrock API キー・自分のモデル ARN（国内モデル + Opus 5）・
 各エディタのセットアップ手順リンクをここに集約した。週次 Teams 通知はこのポータル URL の案内のみを投稿する
 （キー本文・ARN 対応表は通知に載せない）。
 
@@ -101,7 +101,7 @@ apply 後、出力 `profile_ui_url`（API Gateway の URL）が UI の URL。
 1. `profile_ui_url` をブラウザで開く → 「EntraID でサインイン」
 2. 一覧に既存のプロファイルが利用者別に表示される（`app=claude-code` タグのもの）
 3. 利用者名（例 `takeshi.ohno`。IAM ユーザー名／`user` タグに合わせる）を入れて **作成**
-   → Opus 4.8 / Sonnet 4.6 / Haiku 4.5（国内）/ Opus 5（global）の4本がタグ付きで作られる。
+   → Opus 4.8 / Sonnet 4.6 / Haiku 4.5 / Opus 5.5（いずれも国内）/ Opus 5（global）の5本がタグ付きで作られる。
    既存分はスキップするため、既存ユーザーに再度「作成」を実行すれば不足しているモデルだけを追加
 4. 行の **削除** で当該利用者の `app=claude-code` プロファイルを全削除
 5. **プロファイル ARN はクリックでクリップボードにコピー**できる（利用者への配布・貼り付け用）

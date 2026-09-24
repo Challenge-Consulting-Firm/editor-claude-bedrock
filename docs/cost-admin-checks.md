@@ -84,7 +84,7 @@ aws ce get-cost-and-usage \
 ## 4. モデル別コスト（想定外モデルの検知）
 
 サービス名 = モデル名なので、SERVICE ディメンションで金額のある行を並べるとモデル別内訳になる。
-**本構成の想定は国内3モデル + Opus 5**。Sonnet 5など未許可モデルが出た場合や、Opus 5の金額が
+**本構成の想定は国内モデル（Opus 4.8 / Sonnet 4.6 / Haiku 4.5 / Opus 5.5）+ Opus 5（global）**。Sonnet 5など未許可モデルが出た場合や、Opus 5の金額が
 per-userタグ集計と対応しない場合は、別プロジェクト由来または統制外利用を切り分ける。
 
 ```bash
@@ -132,7 +132,7 @@ aws bedrock list-tags-for-resource --region ap-northeast-1 \
 
 `scripts/04-check-cloudtrail.sh` で次の3分類を確認する。
 
-- `国内`: ap-northeast-1/3（国内3モデルの正常系）
+- `国内`: ap-northeast-1/3（国内モデルの正常系。Opus 5.5 もここに入る）
 - `global許可`: `user` / `app=claude-code` / `model` / `residency=global` が揃ったper-userプロファイルによる国外処理
 - `違反`: 上記per-userプロファイル以外による国外処理
 

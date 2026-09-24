@@ -20,10 +20,19 @@ locals {
   # per-user プロファイルの model タグは既存運用との互換性を維持する。
   # ここを opus-4-8 等へ変えると、既存 opus/sonnet/haiku を別モデルと誤認して
   # 重複作成し、report_usage.py の動的集計からも漏れる。
+  #
+  # opus-5-5: Opus 5.5 は jp. プロファイルが提供されたため国内完結モデルとして扱う。
+  #   実測（2026-09-24）:
+  #     jp.anthropic.claude-opus-5-5 は ACTIVE で models[] が
+  #     ap-northeast-1 / ap-northeast-3 の foundation-model のみ（= 推論先が国内に閉じる）
+  #     jp. 直呼び / jp. 由来の per-user アプリ推論プロファイル経由とも Converse 成功
+  #   ⚠️ model タグは opus-5（global の Opus 5）と別値にすること。同一値にすると
+  #     residency が jp / global で衝突し、棚卸しと IAM 条件の双方が壊れる。
   user_profile_models_jp = {
-    opus   = local.app_profile_models_jp["opus-4-8"]
-    sonnet = local.app_profile_models_jp["sonnet-4-6"]
-    haiku  = local.app_profile_models_jp["haiku-4-5"]
+    opus     = local.app_profile_models_jp["opus-4-8"]
+    sonnet   = local.app_profile_models_jp["sonnet-4-6"]
+    haiku    = local.app_profile_models_jp["haiku-4-5"]
+    opus-5-5 = "jp.anthropic.claude-opus-5-5"
   }
 
   # Claude global プロファイル。既定は Opus 5 のみ。⚠️ 国内完結ではない

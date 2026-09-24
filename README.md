@@ -23,11 +23,11 @@
 
 | 軸 | Azure（稼働中） | Bedrock（本 PoC） |
 |---|---|---|
-| 国内完結 | ❌ 実測で不可（DataZone/APAC 止まり） | 国内3モデルは ✅ 東京+大阪限定。Opus 5選択時のみ ⚠️ global処理 |
+| 国内完結 | ❌ 実測で不可（DataZone/APAC 止まり） | 国内モデル（Opus 5.5 含む）は ✅ 東京+大阪限定。Opus 5選択時のみ ⚠️ global処理 |
 | 迂回防止 | deployment 名の運用規約のみ | 国内は `jp.`、Opus 5は user/residencyタグ付きper-userプロファイルだけをIAM許可 | |
 | 監査 | KQL（利用量） | **CloudTrail の `inferenceRegion` で実処理リージョンを事後監査** |
 | エディタからキー利用 | ✅ 実証済み（api-key） | △ **要実測**: OpenAI 互換エンドポイント + Bedrock API キー（Bearer） |
-| モデル | gpt-5.2（APAC） | Claude Opus 4.8 / Sonnet 4.6 / Haiku 4.5（国内）、Opus 5（global） |
+| モデル | gpt-5.2（APAC） | Claude Opus 4.8 / Sonnet 4.6 / Haiku 4.5 / **Opus 5.5**（いずれも国内）、Opus 5（global） |
 
 ## 実測で分かった制約（ap-northeast-1/3・2026-07-14）
 
@@ -60,7 +60,7 @@
    - → **`global.` のみ。実測した実処理先は Opus 5 = `eu-west-1` / Sonnet 5 = `us-east-1`**
      （`global.` プロファイルの models[] にリージョン無し ARN が含まれるのが全世界ルーティングの実体）。
    **運用判断（2026-09-16）**: 開発効率を優先し Opus 5 はグローバル前提で許可（`allow_global_models`）。
-   国内完結が要る作業は 4.x（Opus 4.8 / Sonnet 4.6 / Haiku 4.5）を使う。ポータルに `国外処理` バッジを表示して区別する。
+   国内完結が要る作業は国内モデル（**Opus 5.5** / Opus 4.8 / Sonnet 4.6 / Haiku 4.5）を使う。ポータルに `国外処理` バッジを表示して区別する。
    Opus 5 は user/residency タグ付きper-userアプリ推論プロファイル経由だけを許可し、システム `global.` 直指定は拒否する
 9. **Anthropic の use case フォーム提出（Model access の初回手続き）は必須**だが、執行が API で不整合:
    **Converse は未提出でも通る / InvokeModel は 404 で拒否**。`get-foundation-model-availability` が
