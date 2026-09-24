@@ -1,7 +1,7 @@
 # Claude Code セットアップ（検証 3 実測済み・2026-07-14）
 
-Claude Code CLI から Bedrock の **国内4モデル（`jp.`）と Opus 5（`global.`）**を Bearer API キーで使う手順。
-国内モデルのエンドツーエンド動作は実測済み。Opus 5 はユーザー別アプリ推論プロファイル経由でのみ許可する。
+Claude Code CLI から Bedrock の **国内4モデル（すべて `jp.` = 国内完結）**を Bearer API キーで使う手順。
+エンドツーエンド動作は実測済み。（国外ルーティングの Opus 5 は 2026-09-24 に廃止済み）
 
 ## 0. 前提（運用者側で完了済みであること）
 
@@ -19,7 +19,7 @@ API キーは共有のままでよい（課金は「呼び出したプロファ�
 プロファイル自体は無償。国内モデルは jp. の推論先（東京+大阪）と +10% プレミアムを継承し、
 Opus 5 は global ルーティングを継承する。いずれもユーザー別の `user` タグで棚卸しする。
 
-利用者 1 名につき **Opus 4.8（国内）＋ Sonnet 4.6（国内）＋ Haiku 4.5（国内）＋ Opus 5.5（国内）＋ Opus 5（global）の5本**を
+利用者 1 名につき **Opus 4.8 ＋ Sonnet 4.6 ＋ Haiku 4.5 ＋ Opus 5.5（すべて国内完結）の4本**を
 ポータルから作成する。既存利用者は再度「作成」を押すと、不足しているモデルだけが追加される。
 以下のCLI例は国内モデルを手動作成する旧手順であり、現在はポータル利用を推奨する。
 
@@ -105,8 +105,8 @@ foreach ($U in $users) {
 > スペース区切りで並べる（bash と同一）。
 </details>
 
-- **タグ**: `user`（集計軸）/ `app=claude-code`（他用途と分離）/ `model`（`opus` / `sonnet` / `haiku` / `opus-5-5` / `opus-5`）/
-  `residency`（新規作成分は `jp` / `global`）。Opus 5 は4タグすべてが揃ったper-userプロファイルだけIAMで呼び出し可能
+- **タグ**: `user`（集計軸）/ `app=claude-code`（他用途と分離）/ `model`（`opus` / `sonnet` / `haiku` / `opus-5-5`）/
+  `residency`（現在は全件 `jp`）。3タグが揃ったper-userプロファイルだけIAMで呼び出し可能
 - **`--description` は付けない**: ASCII の一部記号（括弧など）で ValidationException になる。不要なら省略が安全
 - 作成済み一覧: `aws bedrock list-inference-profiles --region ap-northeast-1 --type-equals APPLICATION`
 - **コスト配分タグの有効化**: `user` / `app` / `model` / `residency` を Billing コンソールまたはCLIで有効化する。
@@ -150,32 +150,34 @@ foreach ($U in $users) {
 > ⚠️ `model` タグは `opus-5-5` で、global の `opus-5` とは**別モデル扱い**。
 > 同一視すると `residency` が jp / global で衝突し、棚卸しと IAM 条件の双方が壊れる。
 
-> ### Claude 5 系の制約と Opus 5 の運用 — ⚠️ こちらは国内完結ではない
+> ### Opus 5（global）は廃止しました（✅ 2026-09-24）
 >
-> **Opus 5（`opus-5`）に限った話**。`jp.`（国内完結）プロファイルが未提供で、
-> 東京リージョンに固定して使う手段も存在しない。実測（2026-09-16）で確認した制約:
+> **Opus 5.5 が国内完結で使えるようになったため、国外ルーティングを許容していた
+> Opus 5（`opus-5`）を廃止しました。** 「国内完結 vs 最新モデル」の二択が解消され、
+> 国外処理を許容する理由がなくなったためです。
+>
+> 実施内容:
+> - `allow_global_models` の既定を **false** へ、allowlist を**空**へ変更
+> - IAM から global 用 statement 2 つを削除（ポリシー 3052 → 2158 バイト）
+> - per-user の `cc-<user>-opus-5` プロファイル **6 件を削除**
+>   （`./scripts/12-retire-model-profiles.sh --model opus-5 --apply`）
+>
+> 廃止前の Opus 5 の利用実績は 30 日で計 583 トークン（すべて検証由来）で、
+> 実業務利用はありませんでした。**現在は全モデルが国内完結**で、
+> ポータルに <code>国外処理</code> バッジが出るモデルはありません。
+>
+> <details><summary>参考: Opus 5 を廃止するに至った制約（実測 2026-09-16）</summary>
+>
+> `jp.`（国内完結）プロファイルが未提供で、東京固定で使う手段がなかった:
 >
 > - `jp.anthropic.claude-opus-5` は**存在しない**（`The provided model identifier is invalid`）
 > - 素のモデル ID `anthropic.claude-opus-5` は **on-demand 非対応**
->   （`Invocation of model ID ... with on-demand throughput isn't supported`）= プロファイル経由が強制
-> - 東京の foundation-model ARN からアプリ推論プロファイルを作ろうとしても
->   `The provided foundation model does not support On Demand inference` で**東京ピン留め不可**
-> - `global.` プロファイルの実体は**リージョン無し ARN を含む全世界ルーティング**。
->   東京エンドポイントから呼んでも CloudTrail の `inferenceRegion` は
->   **Opus 5 → `eu-west-1`（アイルランド）/ Sonnet 5 → `us-east-1`（バージニア）**
+> - 東京の foundation-model ARN からのアプリ推論プロファイル作成も不可
+> - `global.` の実処理先は **Opus 5 → `eu-west-1` / Sonnet 5 → `us-east-1`**
 >
-> **判断（2026-09-16）**: 開発効率を優先し、Opus 5 は**グローバル利用を前提に許可**する。
-> ただし国内完結が要る作業（社内コード・顧客データを含むもの）では
-> **Opus 5.5 / Opus 4.8 / Sonnet 4.6 / Haiku 4.5** を使うこと。
-> ポータル上では Opus 5 に <code>国外処理</code> バッジが出るので、それを目印に選び分ける。
->
-> 統制面では `allow_global_models = false`（Terraform 変数）で Opus 5 を IAM ごと塞げる
-> （Opus 5.5 は国内モデルなのでこのフラグの影響を受けず、引き続き利用できる）。
-> 許可対象の基盤モデルはallowlistで明示列挙し、システム `global.` の直指定は許可しない。
-> （同じ接頭辞の `global.openai.*` / `global.xai.*` 等を巻き込まないため）。
-> Opus 5 は利用者ポータルに表示された `user` タグ付きARNからのみ利用できる。
-> Opus 5 と Opus 5.5 は別モデル ID のため、既存 Opus 5 のコピー元を差し替えるのではなく併存させる。
-> 将来 `jp.anthropic.claude-opus-5` 自体が提供された場合に限り、Opus 5 の国内化を別途検討する。
+> 将来再び `jp.` 未提供の最新モデルを使う必要が生じた場合は、
+> `allow_global_models = true` と allowlist への明示列挙を復活させる（ワイルドカードは使わない）。
+> </details>
 
 ## 1. 利用者の設定
 

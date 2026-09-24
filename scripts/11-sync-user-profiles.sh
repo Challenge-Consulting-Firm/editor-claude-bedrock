@@ -2,8 +2,9 @@
 # 全利用者のアプリ推論プロファイルを現行モデル定義に同期する（運用者用・冪等）。
 #
 # 用途:
-#   - 新モデル（例: Opus 5）を追加したとき、全員分を一括で作成する
+#   - 新モデル（例: Opus 5.5）を追加したとき、全員分を一括で作成する
 #   - 新メンバー追加時に 1 名だけ作成する（--user で指定）
+#   ※ モデルを**廃止**したときの残骸削除は ./scripts/12-retire-model-profiles.sh
 #
 # 仕組み:
 #   profile_ui Lambda と同じ lambda/profile_ui.py の create_user_profiles() を呼ぶ。

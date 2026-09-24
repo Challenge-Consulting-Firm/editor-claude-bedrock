@@ -1,6 +1,6 @@
 # VS Code セットアップ（検証 3・2026-07-14 時点）
 
-VS Code から Bedrock の国内モデル（`jp.`。Opus 5.5 を含む）またはユーザー別 Opus 5（global）を使う経路の整理。
+VS Code から Bedrock の国内4モデル（`jp.`。Opus 5.5 を含む）を使う経路の整理。
 
 | 方法 | 判定 |
 |---|---|
@@ -12,8 +12,7 @@ VS Code から Bedrock の国内モデル（`jp.`。Opus 5.5 を含む）また�
 
 1. 拡張 `anthropic.claude-code` をインストール（Marketplace で「Claude Code」）
 2. **ワークスペース側**の `.claude/settings.json` に接続先を書く。`ANTHROPIC_MODEL` は
-   利用者ポータルに表示された自分専用ARNを指定する（国内最新なら `opus-5-5`、従来国内なら `opus`、
-   国外処理を許容する場合だけ `opus-5`）。
+   利用者ポータルに表示された自分専用ARNを指定する（最新なら `opus-5-5`、従来なら `opus`）。
    （ユーザーグローバル `~/.claude/settings.json` に書くと**全プロジェクトが Bedrock 行きになる**ので注意）:
 
 ```json

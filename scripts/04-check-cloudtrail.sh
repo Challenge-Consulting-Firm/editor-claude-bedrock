@@ -4,7 +4,8 @@
 # 判定:
 #   - ap-northeast-1 / ap-northeast-3: 国内処理（OK）
 #   - user/app/model/residency=global タグ付きアプリ推論プロファイルの国外処理:
-#       意図して allowlist した global ルーティング（許可済み例外）
+#       GLOBAL_MODEL_TAGS で明示した allowlist モデルのみ意図した例外として扱う。
+#       既定は空（Opus 5 廃止済み）なので、国外処理はすべて違反・要確認側に倒す
 #   - 上記以外の国外処理: 統制違反
 #
 # 注意:
@@ -17,9 +18,16 @@ require_cmd aws jq
 LOOKBACK_MIN="${1:-60}"
 START=$(date -u -v "-${LOOKBACK_MIN}M" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -d "-${LOOKBACK_MIN} minutes" '+%Y-%m-%dT%H:%M:%SZ')
 
-GLOBAL_MODEL_TAGS_CSV="${GLOBAL_MODEL_TAGS:-opus-5}"
-GLOBAL_MODEL_TAGS_JSON=$(printf '%s' "$GLOBAL_MODEL_TAGS_CSV" |
-  jq -Rc 'split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)) | unique')
+# Opus 5 廃止（2026-09-24）に伴い既定を空にした = いかなる国外処理も「許可済み」と分類しない。
+# 将来 global モデルを再導入したときだけ GLOBAL_MODEL_TAGS=opus-5,... のように明示指定する。
+GLOBAL_MODEL_TAGS_CSV="${GLOBAL_MODEL_TAGS:-}"
+if [[ -z "$GLOBAL_MODEL_TAGS_CSV" ]]; then
+  # 空文字を jq -R に渡すと入力なし扱いで警告になるため、空リストを直接使う
+  GLOBAL_MODEL_TAGS_JSON='[]'
+else
+  GLOBAL_MODEL_TAGS_JSON=$(printf '%s' "$GLOBAL_MODEL_TAGS_CSV" |
+    jq -Rc 'split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)) | unique')
+fi
 
 # 許可された global 経路を、タグ付き per-user アプリプロファイルから動的に解決する。
 # システム global. プロファイル直指定やタグ不備のプロファイルはここに入らない。
@@ -90,7 +98,7 @@ if [[ "$FOUND_ANY" -eq 0 ]]; then
 elif [[ "$BAD" -eq 0 ]]; then
   echo "✅ 監査 OK: 国内モデルは ap-northeast-1/3 に収まり、未許可の国外処理はありません"
   if [[ "$GLOBAL_ALLOWED" -gt 0 ]]; then
-    echo "   ℹ️ user タグ付き allowlist モデル（${GLOBAL_MODEL_TAGS_CSV}）による許可済み global 処理: ${GLOBAL_ALLOWED} 件"
+    echo "   ℹ️ user タグ付き allowlist モデル（${GLOBAL_MODEL_TAGS_CSV:-なし}）による許可済み global 処理: ${GLOBAL_ALLOWED} 件"
   fi
   if [[ "$REVIEW" -gt 0 ]]; then
     echo "   ⚠️ 現在のタグを照合できないアプリプロファイルの国外処理: ${REVIEW} 件（削除済みプロファイル等。要確認）"
