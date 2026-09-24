@@ -12,7 +12,8 @@ VS Code から Bedrock の国内モデル（`jp.`。Opus 5.5 を含む）また�
 
 1. 拡張 `anthropic.claude-code` をインストール（Marketplace で「Claude Code」）
 2. **ワークスペース側**の `.claude/settings.json` に接続先を書く。`ANTHROPIC_MODEL` は
-   利用者ポータルに表示された自分専用ARNを指定する（国内なら `opus`、国外処理許容なら `opus-5`）。
+   利用者ポータルに表示された自分専用ARNを指定する（国内最新なら `opus-5-5`、従来国内なら `opus`、
+   国外処理を許容する場合だけ `opus-5`）。
    （ユーザーグローバル `~/.claude/settings.json` に書くと**全プロジェクトが Bedrock 行きになる**ので注意）:
 
 ```json

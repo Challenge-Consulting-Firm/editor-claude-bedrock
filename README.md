@@ -52,14 +52,16 @@
 6. jp. の大阪ルーティングに備え、明示 Deny の許容リージョンは**東京+大阪の 2 つ**が必要
    （東京のみにすると jp. プロファイル内部の大阪ルーティングが拒否される — 実際に踏んだ）
 7. Bearer キー利用には `bedrock:CallWithBearerToken` の Allow が別途必要
-8. Claude 5 系（`claude-opus-5` / `claude-sonnet-5` / `claude-fable-5`）は東京に提供済みだが **jp. プロファイル未対応**。
-   **東京リージョンに固定して 5 系を使う手段は存在しない**（実測 2026-09-16で 3 経路とも封じられていることを確認）:
+8. Claude 5 系のうち **Opus 5 / Sonnet 5 / Fable 5** は東京に提供済みだが **jp. プロファイル未対応**。
+   **これらを東京リージョンに固定して使う手段は存在しない**（実測 2026-09-16で 3 経路とも封じられていることを確認）:
    - `jp.anthropic.claude-opus-5` は存在しない（`The provided model identifier is invalid`）
    - 素のモデル ID は on-demand 非対応（`inferenceTypesSupported: [INFERENCE_PROFILE]`）= プロファイル経由強制
    - 東京の foundation-model ARN からのアプリ推論プロファイル作成も `does not support On Demand inference`
    - → **`global.` のみ。実測した実処理先は Opus 5 = `eu-west-1` / Sonnet 5 = `us-east-1`**
      （`global.` プロファイルの models[] にリージョン無し ARN が含まれるのが全世界ルーティングの実体）。
-   **運用判断（2026-09-16）**: 開発効率を優先し Opus 5 はグローバル前提で許可（`allow_global_models`）。
+   **Opus 5.5 は例外**: 2026-09-24 に `jp.anthropic.claude-opus-5-5` の ACTIVE と
+   推論先が東京+大阪だけであることを実測し、国内モデルとして追加済み。
+   **運用判断（2026-09-16）**: `jp.` 未提供の Opus 5 は、開発効率を優先してグローバル前提で許可する。
    国内完結が要る作業は国内モデル（**Opus 5.5** / Opus 4.8 / Sonnet 4.6 / Haiku 4.5）を使う。ポータルに `国外処理` バッジを表示して区別する。
    Opus 5 は user/residency タグ付きper-userアプリ推論プロファイル経由だけを許可し、システム `global.` 直指定は拒否する
 9. **Anthropic の use case フォーム提出（Model access の初回手続き）は必須**だが、執行が API で不整合:

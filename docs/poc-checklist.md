@@ -184,7 +184,7 @@ Opus 5 全利用者展開後の定常状態を、デプロイ済みリソース�
 ## Opus 5.5 の国内完結対応（2026-09-24）
 
 **`jp.anthropic.claude-opus-5-5` が提供された**ため、Opus 5.5 を**国内完結モデル**として追加した。
-これまでの「5 系は jp. 未提供 = 国内完結不可」という前提は **Opus 5.5 に限って覚された**
+これまでの「5 系は jp. 未提供 = 国内完結不可」という前提は **Opus 5.5 に限って覆された**
 （Opus 5 は引き続き global のみ）。
 
 ### 前提の実測
@@ -211,7 +211,7 @@ Opus 5 全利用者展開後の定常状態を、デプロイ済みリソース�
 | global 側への混入なし | ✅ `AllowInvokeUserTaggedGlobalAppProfiles` は `opus-5` のまま（分離されている） |
 | 全利用者への展開 | ✅ `11-sync-user-profiles.sh` で **6 名に 6 件新規作成**。既存 4 モデルは再作成なし（冪等） |
 | タグ整合 | ✅ 6 名とも `user` / `app=claude-code` / `model=opus-5-5` / **`residency=jp`** |
-| 実推論（6 名分の per-user ARN | ✅ **6/6** 応答 `OK` |
+| 実推論（6 名分の per-user ARN） | ✅ **6/6** 応答 `OK` |
 | CloudTrail 監査 | ✅ `inferenceRegion=ap-northeast-1`（**国内**判定）。未許可の国外処理なし |
 
 ### IAM ガードレール（simulate-principal-policy 実測）
@@ -220,7 +220,7 @@ Opus 5 全利用者展開後の定常状態を、デプロイ済みリソース�
 |---|---|
 | `opus-5-5` per-user、3タグ揃い / 東京 | ✅ `allowed` |
 | `opus-5-5` per-user / 大阪ルーティング | ✅ `allowed`（jp. が大阪へ振る経路を塞がない） |
-| `opus-5-5` だが**国外リージョン**（迲回） | ✅ **`explicitDeny`**（明示 Deny で遮断） |
+| `opus-5-5` だが**国外リージョン**（迂回） | ✅ **`explicitDeny`**（明示 Deny で遮断） |
 | `opus-5-5` で `user` タグが空（未配賦） | ✅ `implicitDeny` |
 
 ### 実装上の注意点
@@ -231,7 +231,12 @@ Opus 5 全利用者展開後の定常状態を、デプロイ済みリソース�
   Cost Explorer 側で見る（推定単価で概算に誤差を持ち込まない既存方針を踏襲）。
   jp. の +10% プレミアムが乗るため、単価確定時は 4.x と同じ逆算手法を使うこと。
 - ポータル UI のコスト内訳バッジが `m.model === "opus-5"` の**ハードコード**だったため、
-  `modelMeta.residency` 参照へ修正した（放置すると Opus 5.5 が誤って「国外処理」表示になる）。
+  `modelMeta.residency` 参照へ修正した（放置するとモデル追加時の判定が名前依存になる）。
+  あわせて初回表示やタブ先行操作の競合を避けるため、`modelMeta` を確定してからコストを描画する。
+- `scripts/01-list-jp-profiles.sh` は Opus 4.8 / Opus 5.5 について、`ACTIVE` かつ
+  `models[]` が東京・大阪の foundation-model だけであることを機械判定し、条件違反なら非ゼロ終了する。
+- `allow_global_models=false` の plan JSON も検証し、`opus-5` のglobal用IAM・ポータル・レポート定義だけが消え、
+  `opus-5-5` は国内IAM・ポータル・レポートに残ることを確認した。
 
 ## 付帯確認（判定には含めないが記録する）
 

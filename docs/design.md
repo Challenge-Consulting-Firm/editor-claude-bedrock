@@ -55,10 +55,10 @@ Azure 版との対応:
 | 区分 | 範囲 | 決まり方 |
 |---|---|---|
 | 保管（at rest） | 呼び出し元リージョン = 東京 | エンドポイントのリージョン |
-| 推論（inference）・**4.x** | **東京 + 大阪**（国外へ出ない） | `jp.` クロスリージョン推論プロファイル |
-| 推論（inference）・**5 系** | ⚠️ **国外（実測: eu-west-1 / us-east-1）** | `global.` プロファイルのみ。jp. 未提供（§4.1） |
+| 推論（inference）・**`jp.` 対応モデル** | **東京 + 大阪**（国外へ出ない） | `jp.` クロスリージョン推論プロファイル。Opus 5.5 も対象 |
+| 推論（inference）・**global allowlist** | ⚠️ **国外（実測: eu-west-1 / us-east-1）** | `jp.` 未提供モデルの `global.` プロファイル（§4.1） |
 
-- モデル: **Claude Opus 4.8**（Bedrock 提供開始 2026-05-28、東京リージョン提供・`jp.` プロファイル対応の報告あり）
+- モデル: **Claude Opus 5.5**（`jp.anthropic.claude-opus-5-5`、国内完結）および既存の Opus 4.8 / Sonnet 4.6 / Haiku 4.5
 - プロファイル ID は**実測（`scripts/01`）で確定**。`.env` の `JP_PROFILE_ID` が全スクリプト・エディタ設定の単一の参照点
 - 単価: $6 / $30（per 1M、入力/出力・AWS 料金表 2026-07 実測）+ `jp.` プレミアム 10% → **実効 $6.6 / $33.0**。（当初 $5/$25 は誤りだった）
   Prompt Caching（読み取り 0.1 倍）併用でエージェント用途の実効コストを下げる
@@ -83,11 +83,13 @@ Bedrock では IAM で**技術的に強制**する（[infra/main.tf](../infra/ma
    → us-east-1 等の bedrock-runtime へ回り込む迂回を封じる
 3. **任意**: `aws:SourceIp` による IP allowlist（`ALLOWED_IPS` 設定時。Azure 版 R2 相当）
 
-### 4.1 Claude 5 系の例外（国内完結を意図的に放棄する範囲・2026-09-16）
+### 4.1 global プロファイル利用モデルの例外（国内完結を意図的に放棄する範囲・2026-09-16）
 
-開発効率を優先し、**Claude 5 系に限りグローバルルーティングを許容**する（`allow_global_models = true`）。
-5 系は jp. プロファイルが無く、東京固定で使う手段もない（README「実測で分かった制約」#8）ため、
-「国内完結 vs 最新モデル」の二択になる。統制の穴を最小化するため次の設計とする:
+開発効率を優先し、**global allowlist 対象モデルに限りグローバルルーティングを許容**する
+（`allow_global_models = true`）。Opus 5 / Sonnet 5 は `jp.` プロファイルが無く、
+東京固定で使う手段もない（README「実測で分かった制約」#8）ため、「国内完結 vs 対象モデル」の二択になる。
+一方、**Opus 5.5 は `jp.anthropic.claude-opus-5-5` が提供された国内モデル**であり、
+この例外や `allow_global_models` の対象ではない。統制の穴を最小化するため次の設計とする:
 
 - 許可する基盤モデルは **allowlist の明示列挙のみ**（`global_model_profile_ids`）。`global.*` のワイルドカードは使わない
   — 同じ接頭辞で `global.openai.*` / `global.xai.*` が東京に実在し、一括開放になるため
@@ -95,7 +97,7 @@ Bedrock では IAM で**技術的に強制**する（[infra/main.tf](../infra/ma
   `residency=global` の揃ったper-userアプリ推論プロファイルだけを許可し、Cost Explorerの利用者集計を迂回させない
 - 国内リージョン以外を拒否する Deny は、allowlist モデルの **foundation-model ARNだけ**を `NotResource` で除外する。
   システムプロファイルARNは除外しないため、直指定は引き続き拒否される
-- `allow_global_models = false` に戻せば global 用statementとポータル作成対象が消え、**従来の完全国内完結構成に戻る**
+- `allow_global_models = false` に戻せば global 用statementとポータル作成対象が消え、**Opus 5.5 を含む国内モデルだけの構成に戻る**
 
 検証（`simulate-principal-policy`・2026-09-16 実測）:
 

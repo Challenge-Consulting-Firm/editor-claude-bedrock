@@ -55,19 +55,23 @@ variable "openai_compat_region" {
   default     = "ap-northeast-3"
 }
 
-# Claude 5 系（global. プロファイル）の利用可否。
+# global. 推論プロファイルを使うモデルの利用可否。
+# Opus 5.5 のように jp. プロファイルが提供されたモデルは対象外で、
+# allow_global_models = false でも国内モデルとして利用できる。
 #
-# ⚠️ true にすると「推論の国内完結」は当該モデルに限り成立しない。
+# ⚠️ true にすると「推論の国内完結」は global allowlist 対象モデルに限り成立しない。
 # 実測（2026-09-16・東京エンドポイントから global. プロファイルを Converse）:
 #   global.anthropic.claude-opus-5   -> inferenceRegion = eu-west-1（アイルランド）
 #   global.anthropic.claude-sonnet-5 -> inferenceRegion = us-east-1（バージニア）
-# 5 系は jp. プロファイルが存在せず、素のモデル ID は on-demand 非対応
+# Opus 5 / Sonnet 5 は jp. プロファイルが存在せず、素のモデル ID は on-demand 非対応
 # （ValidationException: Retry with the ID or ARN of an inference profile）、
 # 東京の foundation-model ARN からのアプリ推論プロファイル作成も不可
 # （ValidationException: does not support On Demand inference）。
-# よって「東京リージョンに固定して 5 系を使う」手段は現時点で存在しない。
+# よってこれらを東京リージョンに固定して使う手段は現時点で存在しない。
+# 一方、Opus 5.5 は jp.anthropic.claude-opus-5-5 が提供され、東京+大阪に閉じることを
+# 実測済み（2026-09-24）。国内モデルとして user_profile_models_jp で別管理する。
 variable "allow_global_models" {
-  description = "Claude 5 系（global. プロファイル）の利用を許可するか。true にすると当該モデルの推論は国外（実測: eu-west-1 / us-east-1）で行われる"
+  description = "global. システム推論プロファイルを使うモデルの利用を許可するか。true にすると allowlist 対象モデルの推論は国外（実測: eu-west-1 / us-east-1）で行われる。jp. 対応の Opus 5.5 は対象外"
   type        = bool
   default     = true
 }
@@ -108,8 +112,8 @@ locals {
     "arn:aws:bedrock:${r}:${data.aws_caller_identity.current.account_id}:inference-profile/jp.*"
   ]
 
-  # ---- Claude 5 系（global.）の許可セット。allow_global_models = false なら全て空リストになり、
-  #      ポリシー上も statement ごと生成されない（= 従来どおり国内完結のみの構成に戻る）----
+  # ---- global. 利用モデルの許可セット。allow_global_models = false なら全て空リストになり、
+  #      ポリシー上も statement ごと生成されない（Opus 5.5 等の国内モデルには影響しない）----
   global_enabled = var.allow_global_models && length(var.global_model_profile_ids) > 0
 
   # 呼び出し元 IAM には付与せず、profile_ui が per-user アプリ推論プロファイルを

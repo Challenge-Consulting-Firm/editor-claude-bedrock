@@ -4,7 +4,7 @@
 # 判定:
 #   - ap-northeast-1 / ap-northeast-3: 国内処理（OK）
 #   - user/app/model/residency=global タグ付きアプリ推論プロファイルの国外処理:
-#       意図した Claude 5 系 global ルーティング（許可済み例外）
+#       意図して allowlist した global ルーティング（許可済み例外）
 #   - 上記以外の国外処理: 統制違反
 #
 # 注意:
@@ -90,7 +90,7 @@ if [[ "$FOUND_ANY" -eq 0 ]]; then
 elif [[ "$BAD" -eq 0 ]]; then
   echo "✅ 監査 OK: 国内モデルは ap-northeast-1/3 に収まり、未許可の国外処理はありません"
   if [[ "$GLOBAL_ALLOWED" -gt 0 ]]; then
-    echo "   ℹ️ user タグ付き Opus 5 による許可済み global 処理: ${GLOBAL_ALLOWED} 件"
+    echo "   ℹ️ user タグ付き allowlist モデル（${GLOBAL_MODEL_TAGS_CSV}）による許可済み global 処理: ${GLOBAL_ALLOWED} 件"
   fi
   if [[ "$REVIEW" -gt 0 ]]; then
     echo "   ⚠️ 現在のタグを照合できないアプリプロファイルの国外処理: ${REVIEW} 件（削除済みプロファイル等。要確認）"

@@ -11,6 +11,7 @@ Zed の**ネイティブ Amazon Bedrock プロバイダ**から、国内モデ�
 | 使い方 | モデル選択 | 可否 |
 |---|---|---|
 | チャット × Opus 4.8 × 国内完結 | カスタム「社内: Claude Opus 4.8 (国内完結)」 | ✅ 実測 OK |
+| チャット × Opus 5.5 × 国内完結 | カスタム「社内: Claude Opus 5.5 (国内完結)」 | ✅ Bedrock/IAM/CloudTrail 経路は実測済み。Zed実機確認は未実施（カスタムはツールなし） |
 | チャット × Opus 5 × global | ポータルの自分専用 `opus-5` ARNをカスタム登録 | ✅ Bedrock/IAM経路を実測（国外処理・Zedカスタムはツールなし） |
 | エージェント（ツール込み）× 国内完結 | **組み込みの「Claude Sonnet 4.6」**（jp. 自動付与） | ✅ 実測 OK |
 | エージェント × Opus 4.8 | — | ❌ 不可（**Zed 固有の制約**。下記参照） |
@@ -70,9 +71,9 @@ Opus 4.8 チャット**。
       "available_models": [
         {
           // 利用者ポータルに表示された自分専用 ARN を指定する。
-          // 国内なら opus、Opus 5なら opus-5（国外処理）のARNを別エントリで登録可能。
-          "name": "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<PROFILE_ID>",
-          "display_name": "社内: Claude Opus 4.8 (国内完結)",
+          // 国内最新なら opus-5-5、従来国内なら opus、国外処理を許容する場合だけ opus-5。
+          "name": "arn:aws:bedrock:ap-northeast-1:<ACCOUNT_ID>:application-inference-profile/<自分のOPUS_5_5_PROFILE_ID>",
+          "display_name": "社内: Claude Opus 5.5 (国内完結)",
           "max_tokens": 200000,
           "max_output_tokens": 32000
         }
@@ -141,7 +142,7 @@ Settings → AI → LLM Providers → **Amazon Bedrock** → Bedrock API Key 欄
 
 ## 3. 動作確認
 
-1. モデルピッカー →「社内: Claude Opus 4.8 (国内完結)」→ チャットで質問
+1. モデルピッカー →「社内: Claude Opus 5.5 (国内完結)」→ チャットで質問（Zed 実機確認）
 2. 組み込み「Claude Sonnet 4.6」→ エージェントタスク（ツールが有効なことを確認）
 3. 組み込みのglobal Opusやシステム `global.` IDを選ぶとAccessDeniedになるのは**正常**。
    Opus 5はポータルの自分専用ARNからのみ利用できる
@@ -150,7 +151,7 @@ Settings → AI → LLM Providers → **Amazon Bedrock** → Bedrock API Key 欄
 
 - Zed の利用も CloudTrail に記録される。`scripts/04-check-cloudtrail.sh` で国内処理と
   `residency=global` の許可済みOpus 5を分類できる
-- コスト配賦: カスタムモデルは必ず利用者ポータルの自分専用ARNを使うため、`user`タグでCost Explorer集計可能。
+- コスト配賦: カスタムモデルは必ず利用者ポータルの自分専用ARN（国内最新は `opus-5-5`）を使うため、`user`タグでCost Explorer集計可能。
   **組み込み Sonnet 4.6（エージェント用）はシステムプロファイル直のためタグ配賦されない**（design.md §6）。
 
 ## 5. Windows での差分（未実測）
