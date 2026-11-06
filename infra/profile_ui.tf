@@ -1,0 +1,184 @@
+# 利用者プロファイル管理 Web UI（Lambda Function URL + EntraID 認証）。
+#
+# 「ユーザプロファイル」= 利用者ごとのコスト配賦用アプリケーション推論プロファイル
+# （cc-<user>-opus / cc-<user>-sonnet / cc-<user>-haiku。docs/setup-claude-code.md §0.5 を Web UI 化）。
+#
+# 構成（design.md の最小構成方針）:
+#   - Lambda 1 本が HTML(SPA) と JSON API の両方を Function URL 直で配信（API Gateway 不要）
+#   - 認証は EntraID: ブラウザ(MSAL.js)のアクセストークンを Lambda が JWKS 署名検証（tid 一致）
+#   - Bedrock 操作は rotate_key と同じタグ規約（user / app=claude-code / model）
+#
+# ⚠️ Function URL は authtype=NONE（=誰でも URL には到達できる）。実際の認可は Lambda 内の
+#    EntraID トークン検証で行う。API 群はトークン必須、SPA/HTML と /api/config のみ無認証で返す。
+
+# ソースは rotation.tf の archive_file.lambda_zip（lambda/ ディレクトリ全体）を共用する。
+
+resource "aws_iam_role" "profile_ui" {
+  name = "editor-claude-bedrock-profile-ui"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+data "aws_iam_policy_document" "profile_ui" {
+  # プロファイルの列挙・タグ読み取り（一覧表示）
+  statement {
+    sid = "ListProfiles"
+    actions = [
+      "bedrock:ListInferenceProfiles",
+      "bedrock:GetInferenceProfile",
+      "bedrock:ListTagsForResource",
+    ]
+    resources = ["*"]
+  }
+
+  # 作成: コピー元は jp. システムプロファイル、作成先は application-inference-profile。
+  # TagResource はタグ付き作成に付随して必要。
+  # ⚠️ 実測（2026-08-06）: CreateInferenceProfile はコピー元 jp. プロファイルが束ねる
+  #    foundation-model（東京+大阪、account なしの ARN）への権限も要求する。これが無いと
+  #    ap-northeast-3 の foundation-model で AccessDeniedException になる（main.tf の invoke 側と同構図）。
+  statement {
+    sid = "CreateProfiles"
+    actions = [
+      "bedrock:CreateInferenceProfile",
+      "bedrock:TagResource",
+    ]
+    resources = concat(
+      [
+        "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:application-inference-profile/*",
+        "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/jp.*",
+      ],
+      [for r in local.jp_inference_regions : "arn:aws:bedrock:${r}::foundation-model/*"],
+      # global. 利用モデル（既定: Opus 5）をポータルから作成できるようにする。
+      # 上と同構図でコピー元プロファイルとその foundation-model の両方の権限が要る。
+      # allow_global_models = false ならglobal用の両リストだけが空になる（国内Opus 5.5には影響しない）。
+      local.global_profile_arns,
+      local.global_foundation_model_arns,
+    )
+  }
+
+  # 削除: 作成したアプリケーション推論プロファイルのみ
+  statement {
+    sid       = "DeleteProfiles"
+    actions   = ["bedrock:DeleteInferenceProfile"]
+    resources = ["arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:application-inference-profile/*"]
+  }
+
+  # account_id 解決用（profile_ui.py の sts:GetCallerIdentity）
+  statement {
+    sid       = "WhoAmI"
+    actions   = ["sts:GetCallerIdentity"]
+    resources = ["*"]
+  }
+
+  # API キー表示: 新旧クレデンシャルのメタ一覧（本文は含まない）を IAM から読む。
+  statement {
+    sid       = "ListPocUserApiKeys"
+    actions   = ["iam:ListServiceSpecificCredentials"]
+    resources = [aws_iam_user.poc.arn]
+  }
+
+  # API キー本文: rotate_key が保管した現行キー（SSM SecureString）を読む
+  statement {
+    sid       = "ReadApiKey"
+    actions   = ["ssm:GetParameter"]
+    resources = ["arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.api_key_param_name}"]
+  }
+
+  # 利用者別コスト表示: Cost Explorer をタグ（app=claude-code を user で集計）で読む。
+  # Cost Explorer は Resource 単位の制限をサポートしないため resources は "*"（読み取りのみ）。
+  statement {
+    sid       = "ReadCostByUser"
+    actions   = ["ce:GetCostAndUsage"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "Logs"
+    actions   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = ["arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:*"]
+  }
+}
+
+resource "aws_iam_role_policy" "profile_ui" {
+  name   = "profile-ui"
+  role   = aws_iam_role.profile_ui.id
+  policy = data.aws_iam_policy_document.profile_ui.json
+}
+
+resource "aws_lambda_function" "profile_ui" {
+  function_name    = "editor-claude-bedrock-profile-ui"
+  role             = aws_iam_role.profile_ui.arn
+  runtime          = "python3.12"
+  handler          = "profile_ui.handler"
+  filename         = data.archive_file.lambda_zip.output_path
+  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+  timeout          = 30
+
+  environment {
+    variables = {
+      ENTRA_TENANT_ID      = var.entra_tenant_id
+      ENTRA_CLIENT_ID      = var.entra_client_id
+      USER_PROFILE_APP_TAG = "claude-code"
+      # 作成対象モデルの定義を Terraform 側に一元化する（inference-profiles.tf と同じ locals を参照）。
+      # allow_global_models = false なら global. 利用モデルだけが消える。
+      # jp. 対応の Opus 5.5 は国内モデルなので引き続き作成対象。
+      # キー = 安定した model タグ値 / 値 = コピー元システムプロファイル ID。
+      # 既存の opus/sonnet/haiku キーは変更しない（既存プロファイルとの冪等性・集計互換性）。
+      MODEL_SOURCES_JSON = jsonencode(local.user_profile_models)
+      # API キー表示用: rotate_key と同じ PoC ユーザ / SSM パラメータを参照する
+      POC_USER_NAME = aws_iam_user.poc.name
+      API_KEY_PARAM = local.api_key_param_name
+    }
+  }
+}
+
+# 公開経路は API Gateway HTTP API 経由。
+# ⚠️ 実測（2026-08-05）: Lambda Function URL の authtype=NONE（匿名パブリック）は
+#    このアカウント/組織で一律 403（AccessDeniedException）にブロックされる。
+#    リソースポリシー・SCP/RCP・ネットワークいずれも問題なく、AuthType=AWS_IAM+SigV4 なら
+#    通るため「匿名 Function URL の禁止」と切り分け済み。SigV4 はブラウザに置けないので、
+#    パブリック公開が既定の HTTP API に切り替える。認可は従来どおり Lambda 内 JWT 検証。
+resource "aws_apigatewayv2_api" "profile_ui" {
+  name          = "editor-claude-bedrock-profile-ui"
+  protocol_type = "HTTP"
+}
+
+resource "aws_apigatewayv2_integration" "profile_ui" {
+  api_id                 = aws_apigatewayv2_api.profile_ui.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.profile_ui.invoke_arn
+  integration_method     = "POST"
+  payload_format_version = "2.0" # Function URL と同じイベント形（requestContext.http / rawPath）
+}
+
+# 全パス・全メソッドを Lambda へ（ルーティングは profile_ui.py 側で行う）
+resource "aws_apigatewayv2_route" "profile_ui" {
+  api_id    = aws_apigatewayv2_api.profile_ui.id
+  route_key = "$default"
+  target    = "integrations/${aws_apigatewayv2_integration.profile_ui.id}"
+}
+
+resource "aws_apigatewayv2_stage" "profile_ui" {
+  api_id      = aws_apigatewayv2_api.profile_ui.id
+  name        = "$default"
+  auto_deploy = true
+}
+
+resource "aws_lambda_permission" "profile_ui_apigw" {
+  statement_id  = "AllowApiGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.profile_ui.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.profile_ui.execution_arn}/*/*"
+}
+
+output "profile_ui_url" {
+  description = "利用者プロファイル管理 UI の URL（EntraID のリダイレクト URI にも登録する）"
+  value       = aws_apigatewayv2_stage.profile_ui.invoke_url
+}

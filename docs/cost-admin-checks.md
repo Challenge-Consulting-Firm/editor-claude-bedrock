@@ -1,0 +1,180 @@
+# 管理者向け コスト・監査チェックコマンド集
+
+Bedrock（エディタ用 Claude）のコストと国内完結統制を、運用者が随時確認するためのコマンド集。
+すべて**読み取り専用**（末尾「タグ有効化」のみ書き込み）。週次レポート（[lambda/report_usage.py](../lambda/report_usage.py)）
+の自動投稿とは別に、手元で内訳を掘りたいときに使う。
+
+- **対象アカウント**: `<AWS_ACCOUNT_ID>`（検証用）。`aws sts get-caller-identity` でログイン先を確認してから実行する
+- **推論リージョン**: 東京 `ap-northeast-1`（+大阪 `ap-northeast-3` へ jp. ルーティング）
+- **課金の確認は us-east-1 前提**: Cost Explorer / Billing はグローバルサービス。コンソールは
+  画面右上のリージョンを **バージニア北部 (us-east-1)** にして開く（CLI は影響なし）
+
+> ⚠️ **サービス名の罠（重要）**: Cost Explorer 上、Bedrock の推論は **`Amazon Bedrock` では計上されない**。
+> `Claude Opus 4.8 (Amazon Bedrock Edition)` のように**モデルごとの別サービス名**で出る。
+> したがって `--filter '{"Dimensions":{"Key":"SERVICE","Values":["Amazon Bedrock"]}}'` は**常に $0 を返す（誤り）**。
+> サービス名で絞るなら「(Amazon Bedrock Edition)」を含むものを選ぶ。利用者別に見るなら**タグで集計する**（下記）。
+
+---
+
+## 0. 前提：コスト配分タグが有効か
+
+タグ集計は、そのタグが**コスト配分タグとして Active** になっていないと機能しない。
+**有効化前のデータには遡及しない**点に注意（有効化した日以降の課金から集計対象）。
+
+```bash
+# user / app / Project / Phase が Active か
+aws ce list-cost-allocation-tags --status Active \
+  --query 'CostAllocationTags[?TagKey==`user` || TagKey==`app` || TagKey==`Project` || TagKey==`Phase`].[TagKey,Status,LastUpdatedDate]' \
+  --output table
+```
+
+想定される Active 状態（2026-08 時点）: `Project`(2026-07-15) / `Phase` / `user`(2026-08-02) / `app`(2026-08-03)。
+
+---
+
+## 1. 利用者別コスト（本命）
+
+`user` タグでグループ化する。**サービス名フィルタは付けない**（付けると罠に嵌まる）。
+
+```bash
+aws ce get-cost-and-usage \
+  --time-period Start=2026-08-01,End=2026-08-08 \
+  --granularity DAILY --metrics UnblendedCost \
+  --group-by Type=TAG,Key=user \
+  --query 'ResultsByTime[].{Date:TimePeriod.Start,By:Groups[].[Keys[0],Metrics.UnblendedCost.Amount]}' \
+  --output json
+```
+
+- `user$`（値が空）に全額が寄っている場合 = そのデータ期間に `user` タグが**まだ効いていない**
+  （有効化日より前、または課金反映前）。数日待って再確認する
+- `Start`/`End` は用途に合わせて変更する（End は**排他** = 当日を含めたいなら翌日を指定）
+
+---
+
+## 2. アプリ用途別（Claude Code とその他を分離）
+
+`app=claude-code` で絞って利用者別に見る。手順書・週次集計はこのフィルタ前提。
+
+```bash
+aws ce get-cost-and-usage \
+  --time-period Start=2026-08-01,End=2026-08-08 \
+  --granularity MONTHLY --metrics UnblendedCost \
+  --filter '{"Tags":{"Key":"app","Values":["claude-code"]}}' \
+  --group-by Type=TAG,Key=user \
+  --output json
+```
+
+---
+
+## 3. プロジェクト全体の実コスト（週次レポートと同じ集計）
+
+[lambda/report_usage.py](../lambda/report_usage.py) の「実コスト」欄はこの `Project` タグフィルタで算出している。
+手元で同じ値を再現・照合したいときに使う。
+
+```bash
+aws ce get-cost-and-usage \
+  --time-period Start=2026-08-01,End=2026-08-08 \
+  --granularity MONTHLY --metrics UnblendedCost \
+  --filter '{"Tags":{"Key":"Project","Values":["editor-claude-bedrock"]}}' \
+  --query 'ResultsByTime[].Total.UnblendedCost.Amount' --output json
+```
+
+---
+
+## 4. モデル別コスト（想定外モデルの検知）
+
+サービス名 = モデル名なので、SERVICE ディメンションで金額のある行を並べるとモデル別内訳になる。
+**本構成の想定は国内モデルのみ（Opus 4.8 / Sonnet 4.6 / Haiku 4.5 / Opus 5.5）**。
+Opus 5（global）は 2026-09-24 に廃止済みなので、**新規の Opus 5 課金が出たら異常**。
+Sonnet 5 など未許可モデルが出た場合も含め、別プロジェクト由来か統制外利用かを切り分ける。
+（廃止前の Opus 5 課金は履歴として残るため、過去期間の集計には引き続き現れる）
+
+```bash
+aws ce get-cost-and-usage \
+  --time-period Start=2026-08-01,End=2026-08-08 \
+  --granularity DAILY --metrics UnblendedCost \
+  --group-by Type=DIMENSION,Key=SERVICE \
+  --query 'ResultsByTime[].{Date:TimePeriod.Start,Svc:Groups[?Metrics.UnblendedCost.Amount!=`0`].[Keys[0],Metrics.UnblendedCost.Amount]}' \
+  --output json
+```
+
+---
+
+## 5. 推論プロファイルのタグ付け確認
+
+利用者別配賦が効くのは、呼び出すアプリ推論プロファイルに `user`/`app`/`model` タグが付いているから
+（[docs/setup-claude-code.md](setup-claude-code.md) §0.5）。新メンバー追加後などに検証する。
+
+```bash
+# claude-code 用の per-user プロファイル一覧
+aws bedrock list-inference-profiles --type-equals APPLICATION --region ap-northeast-1 \
+  --query 'inferenceProfileSummaries[?starts_with(inferenceProfileName, `cc-`)].{Name:inferenceProfileName,Arn:inferenceProfileArn}' \
+  --output table
+
+# 個別プロファイルのタグ（ARN は上の一覧から）
+aws bedrock list-tags-for-resource --region ap-northeast-1 \
+  --resource-arn "arn:aws:bedrock:ap-northeast-1:<AWS_ACCOUNT_ID>:application-inference-profile/<ID>" \
+  --query 'tags' --output table
+```
+
+各 per-user プロファイルに `user=<氏名>` / `app=claude-code` / `model=opus|sonnet|haiku|opus-5-5` が揃っていること。
+新規作成分は `residency=jp` も確認する（Opus 5 廃止後は全件 `jp`。`global` が出たら残骸を疑う）。
+
+> 💡 **コスト削減の確認ポイント**: 利用者がサブエージェントを Haiku に固定しているかは、
+> 下記「4. モデル別コスト」で Haiku の比率が上がっているかで見る。設定手順は
+> [setup-claude-code.md](setup-claude-code.md) §1.5。⚠️ `CLAUDE_CODE_SUBAGENT_MODEL=haiku` を使う場合、
+> `ANTHROPIC_DEFAULT_HAIKU_MODEL` もper-user ARNへ固定されていれば正しく配賦される。
+> 固定が無いと `jp.anthropic.claude-haiku-4-5-...`（システムプロファイル直）で記録され、
+> 利用者別集計の「(未配賦)」に入る（隔離環境で両ケースを実測 2026-09-16）。
+> 未配賦が増えていたら、Haikuのalias固定先がper-user ARNかを確認する。
+
+---
+
+## 6. 推論リージョンの事後監査（residency）
+
+`scripts/04-check-cloudtrail.sh` で次の3分類を確認する。
+
+- `国内`: ap-northeast-1/3（国内モデルの正常系。Opus 5.5 もここに入る）
+- `global許可`: `GLOBAL_MODEL_TAGS` で明示した allowlist モデルのみ（**現在は空 = Opus 5 廃止済み**）
+- `違反`: 上記以外の国外処理。全モデル国内完結の現状では、国外処理はすべてここに入る
+
+```bash
+# 直近イベントの概要（処理先と許可/違反の詳細判定は次のスクリプトで行う）
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=InvokeModel \
+  --max-results 20 --region ap-northeast-1 \
+  --query 'Events[].{Time:EventTime,User:Username}' --output table
+```
+
+`inferenceRegion` とモデルプロファイルのタグを突合するには `scripts/04-check-cloudtrail.sh` を使う
+（CloudTrail は最大数分の記録遅延あり）。**Opus 5 廃止後は国外処理自体が想定外**なので、
+検出されたらタグ不備・残骸プロファイル・統制外利用のいずれかを切り分ける。
+
+---
+
+## 7. 予算の消化状況
+
+```bash
+aws budgets describe-budgets --account-id <AWS_ACCOUNT_ID> \
+  --query 'Budgets[].{Name:BudgetName,Limit:BudgetLimit.Amount,Actual:CalculatedSpend.ActualSpend.Amount,Forecast:CalculatedSpend.ForecastedSpend.Amount}' \
+  --output table
+```
+
+---
+
+## 付録：コスト配分タグの有効化（書き込み・遡及なし）
+
+集計に必要なタグが Active でない場合に有効化する。**新しいタグは、そのタグ付き課金が一度発生してからでないと
+認識されず、有効化以前の期間には遡及しない**。早めに有効化しておくほど取りこぼしが減る。
+
+```bash
+# 例: app タグを有効化
+aws ce update-cost-allocation-tags-status \
+  --cost-allocation-tags-status TagKey=app,Status=Active
+
+# 複数まとめて（residency は一度タグ付き課金が発生してから認識される）
+aws ce update-cost-allocation-tags-status \
+  --cost-allocation-tags-status TagKey=user,Status=Active TagKey=app,Status=Active TagKey=model,Status=Active TagKey=residency,Status=Active
+```
+
+成功時のレスポンスは `{"Errors": []}`。反映（集計に現れる）まで最大 24h 程度かかる。

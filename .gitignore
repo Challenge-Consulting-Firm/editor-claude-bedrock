@@ -1,0 +1,32 @@
+# デプロイ環境変数・秘密（.env.sample はコミット、.env と派生はしない）
+.env
+.env.bak*
+.env.local
+
+# Terraform
+infra/.terraform/
+infra/.terraform.lock.hcl
+infra/terraform.tfstate
+infra/terraform.tfstate.backup
+infra/*.tfplan
+infra/terraform.tfvars
+
+# 実測ログ（poc-checklist.md に転記した後の生ログ置き場）
+logs/
+
+# OS
+.DS_Store
+
+# 個人の Claude Code 設定（利用者固有 ARN・許可設定を含むため共有しない）
+# agents/・skills/ 等のチーム共有定義はコミット可能にしておく
+.claude/settings.json
+.claude/settings.local.json
+.claude/agent-memory-local/
+
+# Python の生成物（tests / lambda のローカル実行時）
+__pycache__/
+*.pyc
+
+# ローカル検証用(アカウント固有値を含む)・ビルド成果物
+poc-vscode-test/
+infra/*.zip
