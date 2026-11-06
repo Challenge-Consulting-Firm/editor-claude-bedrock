@@ -4,6 +4,7 @@
 # 使い方:
 #   cp .env.sample .env   # 初回のみ。値を実値に置き換える
 #   ./scripts/deploy.sh
+#   ./scripts/deploy.sh -replace=aws_apigatewayv2_api.profile_ui   # 追加引数は terraform plan に渡す（例: API の作り直し＝URL 変更）
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
@@ -40,7 +41,7 @@ fi
 
 cd "$REPO_ROOT/infra"
 terraform init -input=false
-terraform plan -out=poc.tfplan
+terraform plan -out=poc.tfplan "$@"
 
 echo
 read -r -p "上記 plan を apply しますか? [y/N] " ans

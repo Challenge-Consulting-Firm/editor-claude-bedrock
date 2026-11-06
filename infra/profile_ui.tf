@@ -164,10 +164,31 @@ resource "aws_apigatewayv2_route" "profile_ui" {
   target    = "integrations/${aws_apigatewayv2_integration.profile_ui.id}"
 }
 
+# アクセスログ（不正アクセス調査用）。HTTP API は $default ルート 1 本なので routeKey ではなく path/method を記録する。
+resource "aws_cloudwatch_log_group" "profile_ui_access" {
+  name              = "/aws/apigateway/editor-claude-bedrock-profile-ui-access"
+  retention_in_days = 365
+}
+
 resource "aws_apigatewayv2_stage" "profile_ui" {
   api_id      = aws_apigatewayv2_api.profile_ui.id
   name        = "$default"
   auto_deploy = true
+
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.profile_ui_access.arn
+    format = jsonencode({
+      time    = "$context.requestTime"
+      ip      = "$context.identity.sourceIp"
+      method  = "$context.httpMethod"
+      path    = "$context.path"
+      status  = "$context.status"
+      ua      = "$context.identity.userAgent"
+      reqId   = "$context.requestId"
+      latency = "$context.responseLatency"
+      err     = "$context.integrationErrorMessage"
+    })
+  }
 }
 
 resource "aws_lambda_permission" "profile_ui_apigw" {
